@@ -19,7 +19,7 @@
 
 ## 本次更新
 
-- **双架构原生构建**：GitHub Actions 分别在 `macos-15-intel` 与 `macos-15` 上构建 Intel x64、
+- **双架构原生构建**：GitHub Actions 分别在 `macos-15-intel` 与 `macos-26` 上构建 Intel x64、
   Apple Silicon arm64 DMG，不依赖 Rosetta。
 - **macOS 桌面适配**：菜单栏托盘、Finder 文件定位、原生文件选择器、剪贴板链接检测、系统代理读取。
 - **安全存储**：数据库主密钥使用 macOS 钥匙串保护；认证备份仍可加密导出/导入。

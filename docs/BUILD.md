@@ -108,7 +108,7 @@ git push origin v1.3.3
 | Runner | `uname -m` | 产物 |
 | --- | --- | --- |
 | `macos-15-intel` | `x86_64` | `YunX-Desktop-<版本>-macOS-x64.dmg` |
-| `macos-15` | `arm64` | `YunX-Desktop-<版本>-macOS-arm64.dmg` |
+| `macos-26` | `arm64` | `YunX-Desktop-<版本>-macOS-arm64.dmg` |
 
 每个任务会先断言 runner 的真实架构，再执行：
 

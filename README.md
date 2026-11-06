@@ -131,7 +131,7 @@ DMG 输出到 `desktop/build/compose/binaries/main/dmg/`。构建脚本会根据
 `.github/workflows/macos-release.yml` 在推送 `v*` 标签时执行：
 
 1. `macos-15-intel` 原生构建 Intel x64 DMG；
-2. `macos-15` 原生构建 Apple Silicon arm64 DMG；
+2. `macos-26` 原生构建 Apple Silicon arm64 DMG；
 3. 对 DMG 执行 `hdiutil verify` 并生成 SHA-256 校验文件；
 4. 创建或更新 GitHub Release，上传两个 DMG 与校验文件。
 
