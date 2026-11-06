@@ -57,8 +57,8 @@ jobs:
             gradle-${{ runner.os }}-${{ matrix.arch }}-
             gradle-${{ runner.os }}-
 
-      - name: Build DMG
-        run: ./gradlew :desktop:packageDmg --console=plain -PuseChinaMirrors=false
+      - name: Test and build DMG
+        run: ./gradlew :desktop:test :desktop:packageDmg --console=plain -PuseChinaMirrors=false
 
       - name: Rename and checksum artifact
         shell: bash
