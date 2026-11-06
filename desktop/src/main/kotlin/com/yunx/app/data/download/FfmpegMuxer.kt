@@ -126,7 +126,12 @@ object FfmpegMuxer {
 
     /** 用同目录的 ffprobe 取视频总时长（微秒）；没有 ffprobe / 取不到返回 0 */
     private fun probeDurationUs(ffmpeg: File, video: File): Long {
-        val probe = File(ffmpeg.parentFile, "ffprobe.exe").takeIf { it.isFile } ?: return 0L
+        val probeName = if (System.getProperty("os.name").orEmpty().lowercase().contains("win")) {
+            "ffprobe.exe"
+        } else {
+            "ffprobe"
+        }
+        val probe = File(ffmpeg.parentFile, probeName).takeIf { it.isFile } ?: return 0L
         return runCatching {
             val proc = ProcessBuilder(
                 probe.absolutePath,

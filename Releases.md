@@ -1,62 +1,56 @@
-<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&height=300&section=header&text=YunX-Desktop&desc=%E4%BA%91%E6%9E%90%20%C2%B7%20%E7%BD%91%E7%9B%98%E5%88%86%E4%BA%AB%E9%93%BE%E6%8E%A5%E8%A7%A3%E6%9E%90%E4%B8%8E%E9%AB%98%E9%80%9F%E4%B8%8B%E8%BD%BD&fontSize=64&fontColor=ffffff&descSize=16&animation=fadeIn&fontAlignY=40&descAlignY=55" />
+<div align="center">
 
-# 云析桌面版 v1.3.3
+<img src="desktop/src/main/resources/icon.png" width="96" alt="云析 YunX-Desktop" />
 
-> 发布日期：2026-10-31
-> 安卓版：CYQawa/YunX ｜ 桌面版：tidain/YunX-Desktop
+# 云析桌面版 · macOS 首个版本
 
-## 新增：P2P 下载（磁力 / BT 种子 / ed2k）
+基于官方 Windows 桌面版与 Compose Multiplatform 构建。
 
-在网盘、视频、GitHub 之外，新增一条独立的高速下载链路 —— 直接吃**磁力链接**、**BT 种子文件**与 **ed2k（电驴）链接**，统一交给 Gopeed 引擎多线程下载。
-
-- **ed2k 电驴链接下载**：粘贴 `ed2k://` 链接即可解析并加入下载，与磁力 / 种子走同一套引擎与任务管理。
-
-- **本地种子文件**：新建下载弹窗新增「选择种子文件」，可直接挑选本机 `.torrent` 开始下载，无需依赖磁力链。
-
-- **BT Tracker 管理二级页**：新增独立的 **Tracker 服务器**管理页，集中维护 tracker 列表；BT 任务会把这些 tracker 下发到引擎，\*\*修复公网磁力 / 种子一直卡在「解析中」\*\*的问题。
-
-- **DHT 开关**：下载引擎页可开关 BT 的 DHT（分布式哈希表），按网络环境自行取舍。
-
-- **P2P 任务 peer 概览**：下载中的磁力 / 种子 / ed2k 任务会显示「**种子 N · 连接 M · 节点 K**」，实时看到连接与做种情况。
-
-## 修复与优化
-
-- **修复 P2P 任务「继续」被内置下载器执行**：磁力 / 种子任务点「继续」曾可能被交给内置下载器而非引擎，现已正确路由回 Gopeed 引擎。
-
-- **引擎失败原因可见**：此前引擎任务失败一律只显示「Gopeed 引擎下载失败」，现改为回读引擎返回的**真实错误信息**，便于定位（如 tracker 无响应、资源不可用等）。
-
-- **状态文案统一**：任务状态「正在解析磁力…」改为「**正在解析…**」，已覆盖磁力 / 种子 / ed2k 三类链接。
-
-- **修复内嵌浏览器原生包解压失败**：CEF 原生包重新换回 `tar.gz`，避免个别环境下 `tar.xz` 解压异常。
-
-## 新增：界面与体验
-
-- **下载列表滚动条常驻**：下载列表右侧显示常驻滚动条，任务多时一眼可见当前位置。
-
-- **失败任务置顶**：失败的任务自动排到列表最前（含文件夹分组内部），失败项不再被淹没。
-
-- **添加弹窗识别名称**：新建任务时「名称」输入框会随粘贴的链接**实时重算占位名称**，确认前即可看清将保存成什么名字。
-
-- **主窗口启动位置可设置**：「设置 → 主窗口启动位置」可指定窗口首次出现的位置；支持进入**全屏遮罩拖拽站位**，把窗口摆到屏幕任意处后一键记录。
-
-## 系统要求
-
-- Windows 10 / 11 x64
+</div>
 
 ## 下载
 
-<https://github.com/tidain/YunX-Desktop/releases>
+| 芯片 | 文件 |
+| --- | --- |
+| Apple Silicon（M1 / M2 / M3 / M4） | `YunX-Desktop-1.3.3-macOS-arm64.dmg` |
+| Intel Mac | `YunX-Desktop-1.3.3-macOS-x64.dmg` |
 
-- **便携版**：解压即用
+每个 DMG 均附带 `.sha256` 校验文件。请根据「 → 关于本机」中的芯片类型选择对应版本。
 
-- **安装版**：安装到 `%LOCALAPPDATA%\Programs\YunX-Desktop`
+## 本次更新
 
-> 视频预览与 DASH 合轨所需的 FFmpeg、以及 P2P / 外部下载所需的 **Gopeed 引擎**均**不随安装包发布**，首次使用时可在应用内「引擎管理」一键下载（装到应用私有目录，不改系统环境变量）。
+- **双架构原生构建**：GitHub Actions 分别在 `macos-15-intel` 与 `macos-15` 上构建 Intel x64、
+  Apple Silicon arm64 DMG，不依赖 Rosetta。
+- **macOS 桌面适配**：菜单栏托盘、Finder 文件定位、原生文件选择器、剪贴板链接检测、系统代理读取。
+- **安全存储**：数据库主密钥使用 macOS 钥匙串保护；认证备份仍可加密导出/导入。
+- **浏览器登录**：修复 JCEF 初始化与退出竞态，内嵌 Chromium 登录在归档后重新打开仍可正常使用。
+- **Cookie 导入**：支持从 Chrome / Edge / Brave / Vivaldi / Opera / Chromium / Firefox 导入登录态。
+- **界面优化**：修复左上角大标题在 macOS 下呈浅灰半透明的问题，并避免折叠动画停留在中间状态。
+- **完成通知**：下载完成后通过 macOS 通知提醒；详细下载进度仍显示在应用窗口内。
+
+## 已知限制
+
+- 当前构建未经过 Apple Developer ID 签名与公证。若首次启动被 Gatekeeper 拦截，请右键选择「打开」，
+  或执行：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/YunX-Desktop.app
+```
+
+- 推荐把应用安装到 `/Applications`。内嵌浏览器与部分系统能力需要在「应用程序」目录运行。
+- ffplay 预览使用独立窗口；未安装 FFmpeg 时会回退到内置 JavaFX 播放器。
+- 应用内部分说明文档继承自上游 Windows 版，macOS 专属路径与构建方式以 README / docs/BUILD.md 为准。
+
+## 数据目录
+
+```text
+~/Library/Application Support/YunX
+```
 
 ## 反馈
 
-<https://github.com/tidain/YunX-Desktop/issues>
+<https://github.com/daijunhaoMinecraft/YunX-MacOS/issues>
 
 ***
 
-*CYQawa/YunX 的官方电脑端，GNU AGPL-3.0 开源。*
+*基于 [tidain/YunX-Desktop](https://github.com/tidain/YunX-Desktop)，GNU AGPL-3.0 开源。*

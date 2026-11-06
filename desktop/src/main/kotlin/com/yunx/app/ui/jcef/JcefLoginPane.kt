@@ -81,7 +81,7 @@ fun JcefLoginPane(
     anyOfKeys: List<String> = emptyList()
 ) {
     val scope = rememberCoroutineScope()
-    val app = JcefHolder.app()
+    val app = JcefHolder.ensureUsable()
     var detectedCookie by remember { mutableStateOf<String?>(null) }
     var isSaving by remember { mutableStateOf(false) }
     var browserFailure by remember { mutableStateOf<String?>(null) }
@@ -93,6 +93,42 @@ fun JcefLoginPane(
         } else {
             try {
                 val client: CefClient = app.createClient()
+                client.addLoadHandler(object : org.cef.handler.CefLoadHandler {
+                    override fun onLoadingStateChange(
+                        browser: CefBrowser,
+                        isLoading: Boolean,
+                        canGoBack: Boolean,
+                        canGoForward: Boolean
+                    ) {
+                        Log.i(TAG, "loading=$isLoading url=${browser.url}")
+                    }
+
+                    override fun onLoadStart(
+                        browser: CefBrowser,
+                        frame: org.cef.browser.CefFrame,
+                        transitionType: org.cef.network.CefRequest.TransitionType
+                    ) {
+                        Log.i(TAG, "load start url=${frame.url}")
+                    }
+
+                    override fun onLoadEnd(
+                        browser: CefBrowser,
+                        frame: org.cef.browser.CefFrame,
+                        httpStatusCode: Int
+                    ) {
+                        Log.i(TAG, "load end status=$httpStatusCode url=${frame.url}")
+                    }
+
+                    override fun onLoadError(
+                        browser: CefBrowser,
+                        frame: org.cef.browser.CefFrame,
+                        errorCode: org.cef.handler.CefLoadHandler.ErrorCode,
+                        errorText: String,
+                        failedUrl: String
+                    ) {
+                        Log.e(TAG, "load error $errorCode $errorText url=$failedUrl")
+                    }
+                })
                 val browser: CefBrowser = client.createBrowser(loginUrl, false, false)
                 // 不调用 createImmediately()：它会在画布尚未挂到窗口（尺寸为 0）时
                 // 强行创建原生浏览器窗口，首次绘制丢失 → 白屏直到手动缩放窗口。
@@ -252,7 +288,18 @@ fun JcefLoginPane(
                                     browserHolder.browser.uiComponent.setBounds(0, 0, width, height)
                                 }
                             })
-                            javax.swing.SwingUtilities.invokeLater { validate() }
+                            javax.swing.SwingUtilities.invokeLater {
+                                validate()
+                                Log.i(
+                                    TAG,
+                                    "JCEF canvas attached: panel=${width}x${height} " +
+                                        "canvas=${browserHolder.browser.uiComponent.bounds}"
+                                )
+                                nudgeJcefCanvas(browserHolder.browser)
+                                if (com.yunx.app.util.WindowsTitleBar.isMac) {
+                                    browserHolder.browser.createImmediately()
+                                }
+                            }
                         }
                     },
                     modifier = Modifier.fillMaxSize(),
@@ -297,6 +344,26 @@ fun JcefLoginPane(
 }
 
 private class BrowserHolder(val client: CefClient, val browser: CefBrowser)
+
+/**
+ * macOS 下 JCEF 只会在画布 paint 时把尺寸/裁剪信息提交给 Chromium。
+ * 首帧往往被 Compose 画布盖住而没有触发 paint，表现为页面已加载但一片空白，
+ * 手动缩放窗口后才出现。这里在挂载后主动重绘几次，等价于一次无感缩放。
+ */
+private fun nudgeJcefCanvas(browser: CefBrowser) {
+    fun repaint() {
+        browser.uiComponent.invalidate()
+        browser.uiComponent.repaint()
+        browser.uiComponent.parent?.repaint()
+    }
+    javax.swing.SwingUtilities.invokeLater { repaint() }
+    listOf(250, 750, 1500).forEach { delayMs ->
+        javax.swing.Timer(delayMs) { repaint() }.apply {
+            isRepeats = false
+            start()
+        }
+    }
+}
 
 /**
  * 从全局 Cookie 管理器收集目标域 Cookie；必需键齐全时返回 "k=v; ..." 串。

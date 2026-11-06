@@ -20,12 +20,27 @@ import java.util.prefs.Preferences
  */
 object AppContext {
 
-    /** 应用数据根目录：默认 <用户目录>/.yunx-desktop；可用环境变量 YUNX_DESKTOP_DATA_DIR 覆盖（测试/沙箱环境用） */
-    val dataDir: File = System.getenv("YUNX_DESKTOP_DATA_DIR")?.let { File(it) }
-        ?: File(System.getProperty("user.home"), ".yunx-desktop")
+    private val isMac = System.getProperty("os.name").orEmpty().lowercase()
+        .let { it.contains("mac") || it.contains("darwin") }
 
-    /** 旧版数据根目录（.yunx-pc）：首次启动时整体迁移到新目录 */
-    private val legacyDataDir: File = File(System.getProperty("user.home"), ".yunx-pc")
+    /**
+     * 应用数据根目录：
+     * - macOS：`~/Library/Application Support/YunX`
+     * - Windows：`~/.yunx-desktop`
+     * 可用环境变量 `YUNX_DESKTOP_DATA_DIR` 覆盖（测试/沙箱环境用）。
+     */
+    val dataDir: File = System.getenv("YUNX_DESKTOP_DATA_DIR")?.let { File(it) }
+        ?: if (isMac) {
+            File(System.getProperty("user.home"), "Library/Application Support/YunX")
+        } else {
+            File(System.getProperty("user.home"), ".yunx-desktop")
+        }
+
+    /** 旧版数据根目录：首次启动时按顺序整体迁移到新目录 */
+    private val legacyDataDirs: List<File> = buildList {
+        add(File(System.getProperty("user.home"), ".yunx-pc"))
+        if (isMac) add(File(System.getProperty("user.home"), ".yunx-desktop"))
+    }
 
     // ---------- 杂项偏好（必须在下面解析目录之前声明：Kotlin 单例按声明顺序初始化）----------
 
@@ -91,7 +106,8 @@ object AppContext {
      */
     private fun migrateLegacyDataDir() {
         if (System.getenv("YUNX_DESKTOP_DATA_DIR") != null) return
-        if (dataDir.exists() || !legacyDataDir.exists()) return
+        if (dataDir.exists()) return
+        val legacyDataDir = legacyDataDirs.firstOrNull { it.exists() } ?: return
         if (!legacyDataDir.renameTo(dataDir)) {
             Log.w("YunX-DataDir", "旧数据目录迁移失败：${legacyDataDir.absolutePath}")
             return
@@ -199,12 +215,20 @@ object AppContext {
     }
 
     /**
-     * 应用根目录：优先取 jpackage 注入的 `jpackage.app-path`（指向 `<root>/YunX-Desktop.exe`），
-     * 便携版启动器会把工作目录设为程序根目录（开发运行时为工程目录）。
+     * 应用根目录：优先取 jpackage 注入的 `jpackage.app-path`。
+     * macOS 上该值是 `YunX-Desktop.app/Contents/MacOS/YunX-Desktop`，要回到 `.app` 目录；
+     * Windows 上则回到 exe 所在目录。
      */
     private fun resolveAppRoot(): File {
         System.getProperty("jpackage.app-path")?.let { p ->
-            File(p).parentFile?.takeIf { it.isDirectory }?.let { return it }
+            val path = File(p)
+            if (isMac) {
+                val marker = "${File.separator}.app${File.separator}"
+                val raw = path.absolutePath
+                val index = raw.indexOf(marker)
+                if (index >= 0) return File(raw.substring(0, index + 5))
+            }
+            path.parentFile?.takeIf { it.isDirectory }?.let { return it }
         }
         return File(System.getProperty("user.dir") ?: ".")
     }

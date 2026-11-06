@@ -8,6 +8,7 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.SecureRandom
+import java.util.concurrent.TimeUnit
 import java.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.SecretKeyFactory
@@ -22,8 +23,8 @@ import javax.crypto.spec.SecretKeySpec
  * | --- | --- | --- | --- |
  * | [LOOSE] 宽松 | 明文 SQLite | AES-256-GCM | **明文**（现状，换机器/便携用这档） |
  * | [NORMAL] 普通（默认） | 明文 SQLite | AES-256-GCM | 用**本机派生密钥**包裹（绑定本机） |
- * | [STRICT] 较为严格 | 明文 SQLite | AES-256-GCM | 用 **Windows DPAPI** 包裹（绑定当前 Windows 用户） |
- * | [STRICTEST] 严格 | 整体加密（SQLCipher） | 同上 | DPAPI —— **尚未支持**，见 [isSupported] |
+ * | [STRICT] 较为严格 | 明文 SQLite | AES-256-GCM | 用**系统密钥库**包裹（Windows DPAPI / macOS Keychain） |
+ * | [STRICTEST] 严格 | 整体加密（SQLCipher） | 同上 | 系统密钥库 —— **尚未支持**，见 [isSupported] |
  *
  * ★ 关键取舍：前三档保护的都是**密钥**，库里的凭证列本来就是 AES 密文，所以**切档只需重新包裹 32 字节密钥**，
  *   不碰库里任何数据 —— 秒级完成、零数据风险。库里其它元数据（任务文件名 / URL / 保存路径）这三档都是明文。
@@ -52,7 +53,8 @@ enum class DbEncryptionLevel(val id: String, val label: String) {
  * 封装格式（全部以 `yunx:key:` 开头，便于与老版本的「裸 32 字节」区分）：
  * - 宽松：[KEY_FILE] 里直接是 32 字节原始密钥（与历史版本一致，天然兼容）；
  * - 普通：`yunx:key:mk:v1:<salt b64>:<iv b64>:<ct b64>`，包裹密钥 = PBKDF2(机器指纹, salt)；
- * - 较为严格：`yunx:key:dpapi:v1:<blob b64>`，包裹密钥交给 Windows DPAPI。
+ * - 较为严格：Windows 为 `yunx:key:dpapi:v1:<blob b64>`，macOS 为
+ *   `yunx:key:keychain:v1:<service>`；包裹密钥交给系统密钥库。
  */
 object DbKeyStore {
 
@@ -116,6 +118,7 @@ object DbKeyStore {
         val actual = when {
             body.startsWith("mk:v1:") -> DbEncryptionLevel.NORMAL
             body.startsWith("dpapi:v1:") -> DbEncryptionLevel.STRICT
+            body.startsWith("keychain:v1:") -> DbEncryptionLevel.STRICT
             else -> throw IllegalStateException("未知的密钥封装格式")
         }
         // 封装格式自带标识，按格式解包即可；与配置档位不一致时只记一条（可能是手动改过偏好）
@@ -124,7 +127,11 @@ object DbKeyStore {
         }
         return when (actual) {
             DbEncryptionLevel.NORMAL -> unwrapMachineKey(body.removePrefix("mk:v1:"))
-            else -> unwrapDpapi(body.removePrefix("dpapi:v1:"))
+            else -> when {
+                body.startsWith("dpapi:v1:") -> unwrapDpapi(body.removePrefix("dpapi:v1:"))
+                body.startsWith("keychain:v1:") -> unwrapKeychain(body.removePrefix("keychain:v1:"))
+                else -> throw IllegalStateException("未知的系统密钥库封装格式")
+            }
         }.also {
             require(it.size == 32) { "invalid credential key length" }
         }
@@ -137,7 +144,7 @@ object DbKeyStore {
         val content = when (level) {
             DbEncryptionLevel.LOOSE -> key
             DbEncryptionLevel.NORMAL -> wrapMachineKey(key).toByteArray(Charsets.UTF_8)
-            DbEncryptionLevel.STRICT -> wrapDpapi(key).toByteArray(Charsets.UTF_8)
+            DbEncryptionLevel.STRICT -> wrapSystemKeyStore(key).toByteArray(Charsets.UTF_8)
             DbEncryptionLevel.STRICTEST -> throw IllegalStateException("严格档需要 SQLCipher 支持，暂未实现")
         }
         file.parentFile?.mkdirs()
@@ -186,9 +193,9 @@ object DbKeyStore {
     /**
      * 机器派生密钥：PBKDF2(机器指纹, salt)。
      *
-     * 指纹只用**开机即稳定、且不随账号改名而变**的三项：Windows MachineGuid（注册表，机器唯一）+ OS + 架构。
+     * 指纹只用**开机即稳定、且不随账号改名而变**的三项：平台机器标识 + OS + 架构。
+     * Windows 使用 MachineGuid，macOS 使用 IOPlatformUUID，Linux 使用 /etc/machine-id。
      * ★ 刻意不掺用户名/计算机名：用户改一次计算机名就会解不开自己的凭证，代价远大于收益。
-     * 读不到 MachineGuid 时退回「主机名 + 用户名」（仍有绑定效果，但改名会失效，日志会记一条）。
      */
     private fun machineKey(salt: ByteArray): SecretKeySpec {
         val spec = PBEKeySpec(machineFingerprint().toCharArray(), salt, PBKDF2_ITERATIONS, 256)
@@ -201,7 +208,7 @@ object DbKeyStore {
      *
      * ★ 旧实现读不到 MachineGuid 就静默退回「主机名 + 用户名」——那会派生出一把**不同的**密钥，
      *   偶尔一次读取失败就会让解包报 AEADBadTag，被误判成「密钥彻底损坏」→ 换密钥 → 凭证全丢。
-     *   MachineGuid 在 Windows 上始终存在，读不到只可能是暂时性故障，因此宁可本次失败也不换指纹。
+     *   平台机器标识在正常系统中始终存在，读不到只可能是暂时性故障，因此宁可本次失败也不换指纹。
      */
     class MachineFingerprintUnavailable(message: String) : IllegalStateException(message)
 
@@ -211,10 +218,16 @@ object DbKeyStore {
         append(System.getProperty("os.name").orEmpty()).append('|')
         append(System.getProperty("os.arch").orEmpty()).append('|')
         append(
-            machineGuid() ?: throw MachineFingerprintUnavailable(
-                "暂时读不到 MachineGuid，本次不做密钥解包（下次会重试）"
+            platformMachineId() ?: throw MachineFingerprintUnavailable(
+                "暂时读不到本机唯一标识，本次不做密钥解包（下次会重试）"
             )
         )
+    }
+
+    private fun platformMachineId(): String? = when {
+        isWindows() -> machineGuid()
+        isMac() -> macPlatformUuid()
+        else -> linuxMachineId()
     }
 
     /** Windows MachineGuid（HKLM\SOFTWARE\Microsoft\Cryptography），普通用户可读 */
@@ -224,7 +237,31 @@ object DbKeyStore {
         ).takeIf { it.isNotBlank() }
     }.getOrNull()
 
-    /** 较为严格档：Windows DPAPI（CryptProtectData，绑定当前登录用户） */
+    /** macOS IOPlatformUUID：ioreg 输出形如 `"IOPlatformUUID" = "..."` */
+    private fun macPlatformUuid(): String? = runCatching {
+        val process = ProcessBuilder(
+            "/usr/sbin/ioreg", "-rd1", "-c", "IOPlatformExpertDevice"
+        ).redirectErrorStream(true).start()
+        val output = process.inputStream.bufferedReader().use { it.readText() }
+        if (!process.waitFor(3, TimeUnit.SECONDS)) process.destroyForcibly()
+        Regex("\"IOPlatformUUID\"\\s*=\\s*\"([^\"]+)\"")
+            .find(output)?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }
+    }.getOrNull()
+
+    private fun linuxMachineId(): String? = runCatching {
+        File("/etc/machine-id").takeIf { it.isFile }?.readText()?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: File("/var/lib/dbus/machine-id").takeIf { it.isFile }?.readText()?.trim()
+                ?.takeIf { it.isNotBlank() }
+    }.getOrNull()
+
+    private fun wrapSystemKeyStore(key: ByteArray): String = when {
+        isWindows() -> wrapDpapi(key)
+        isMac() -> wrapKeychain(key)
+        else -> throw IllegalStateException("当前系统没有可用的系统密钥库")
+    }
+
+    /** Windows DPAPI（CryptProtectData，绑定当前登录用户） */
     private fun wrapDpapi(key: ByteArray): String {
         require(isWindows()) { "DPAPI 仅在 Windows 上可用" }
         val blob = Crypt32Util.cryptProtectData(key)
@@ -237,6 +274,55 @@ object DbKeyStore {
         return Crypt32Util.cryptUnprotectData(blob)
     }
 
+    /**
+     * macOS Keychain：密钥本身存进登录钥匙串，credential.key 只保存服务名。
+     * 不把密钥写进 key 文件，避免严格档退化成普通文件保护。
+     */
+    private fun wrapKeychain(key: ByteArray): String {
+        require(isMac()) { "Keychain 仅在 macOS 上可用" }
+        val encoded = Base64.getEncoder().encodeToString(key)
+        val process = ProcessBuilder(
+            "security", "add-generic-password",
+            "-U",
+            "-a", KEYCHAIN_ACCOUNT,
+            "-s", KEYCHAIN_SERVICE,
+            "-w", encoded
+        ).redirectErrorStream(true).start()
+        val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
+        val finished = process.waitFor(8, TimeUnit.SECONDS)
+        if (!finished) runCatching { process.destroyForcibly() }
+        check(finished && process.exitValue() == 0) {
+            "写入 macOS 钥匙串失败${output.takeIf { it.isNotBlank() }?.let { "：$it" } ?: ""}"
+        }
+        return "$PREFIX" + "keychain:v1:$KEYCHAIN_SERVICE"
+    }
+
+    private fun unwrapKeychain(service: String): ByteArray {
+        require(isMac()) { "Keychain 仅在 macOS 上可用" }
+        val actualService = service.trim().takeIf { it.isNotBlank() } ?: KEYCHAIN_SERVICE
+        val process = ProcessBuilder(
+            "security", "find-generic-password",
+            "-a", KEYCHAIN_ACCOUNT,
+            "-s", actualService,
+            "-w"
+        ).redirectErrorStream(false).start()
+        val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
+        val error = process.errorStream.bufferedReader().use { it.readText() }.trim()
+        val finished = process.waitFor(8, TimeUnit.SECONDS)
+        if (!finished) runCatching { process.destroyForcibly() }
+        check(finished && process.exitValue() == 0) {
+            "无法从 macOS 钥匙串读取凭证密钥${error.takeIf { it.isNotBlank() }?.let { "：$it" } ?: ""}"
+        }
+        return Base64.getDecoder().decode(output)
+    }
+
     private fun isWindows(): Boolean =
         System.getProperty("os.name").orEmpty().lowercase().contains("win")
+
+    private fun isMac(): Boolean =
+        System.getProperty("os.name").orEmpty().lowercase()
+            .let { it.contains("mac") || it.contains("darwin") }
+
+    private const val KEYCHAIN_SERVICE = "com.yunx.desktop.credential"
+    private const val KEYCHAIN_ACCOUNT = "credential-key"
 }

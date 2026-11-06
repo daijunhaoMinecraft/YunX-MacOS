@@ -59,7 +59,12 @@ object SingleInstance {
      * 找不到窗口（例如它正在启动 / 已最小化到托盘）时短暂重试几次。
      */
     fun focusExistingWindow() {
-        if (!System.getProperty("os.name", "").lowercase().contains("win")) return
+        val os = System.getProperty("os.name", "").lowercase()
+        if (os.contains("mac") || os.contains("darwin")) {
+            activateMacApp()
+            return
+        }
+        if (!os.contains("win")) return
         repeat(6) { attempt ->
             val hwnd = runCatching { User32.INSTANCE.FindWindow(null, WINDOW_TITLE) }.getOrNull()
             if (hwnd != null) {
@@ -76,5 +81,22 @@ object SingleInstance {
             if (attempt < 5) Thread.sleep(200L)
         }
         Log.w(TAG, "已有实例在运行，但没找到主窗口（可能仍在启动）")
+    }
+
+    /** macOS：通过 Launch Services 重新激活已运行的 .app（由 jpackage.app-path 推算） */
+    private fun activateMacApp() {
+        val appPath = System.getProperty("jpackage.app-path")?.let { path ->
+            val marker = "${File.separator}.app${File.separator}"
+            val index = path.indexOf(marker)
+            if (index >= 0) path.substring(0, index + 5) else null
+        }
+        runCatching {
+            if (appPath != null) {
+                ProcessBuilder("open", appPath).start()
+            } else {
+                ProcessBuilder("osascript", "-e", "tell application \"YunX-Desktop\" to activate").start()
+            }
+            Log.i(TAG, "已有实例在运行，已请求 macOS 激活其窗口")
+        }.onFailure { Log.w(TAG, "激活已有实例失败: ${it.message}") }
     }
 }

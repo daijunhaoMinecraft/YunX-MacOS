@@ -6,9 +6,14 @@ import androidx.compose.runtime.setValue
 import com.yunx.app.AppContext
 import com.yunx.app.util.Log
 import me.friwi.jcefmaven.CefAppBuilder
+import me.friwi.jcefmaven.MavenCefAppHandlerAdapter
 import org.cef.CefApp
+import org.cef.CefApp.CefAppState
 import org.cef.CefSettings
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
+import javax.swing.SwingUtilities
+import kotlin.system.exitProcess
 
 /**
  * JCEF（内嵌 Chromium）全局持有者。
@@ -48,6 +53,17 @@ object JcefHolder {
     private val lock = Any()
     private var initThread: Thread? = null
 
+    /**
+     * macOS 上 Cmd+Q / 应用菜单「退出」会先通知 JCEF。必须拦截默认的 dispose，
+     * 否则 CEF 进入 TERMINATED，而 Compose 可能因「关闭到托盘」继续存活，之后再登录就会报
+     * `Can't crate client in state TERMINATED`。
+     */
+    @Volatile
+    var terminateHandler: (() -> Unit)? = null
+
+    /** CEF 的终止通知可能重复到达；只允许触发一次应用退出。 */
+    private val terminationRequested = AtomicBoolean(false)
+
     /** 一次性：本次进程是否已做过「上次异常退出」的检测（多次重试只做一次） */
     @Volatile
     private var crashRecoveryDone = false
@@ -73,6 +89,35 @@ object JcefHolder {
                     if (JcefNativesInstaller.ensureInstalled(installDir)) {
                         builder.setSkipInstallation(true)
                     }
+                    builder.setAppHandler(object : MavenCefAppHandlerAdapter() {
+                        override fun onBeforeTerminate(): Boolean {
+                            if (terminationRequested.compareAndSet(false, true)) {
+                                Log.i(TAG, "收到 macOS 应用终止请求，交给 Compose 统一退出")
+                                SwingUtilities.invokeLater {
+                                    val handler = terminateHandler
+                                    if (handler != null) {
+                                        handler()
+                                    } else {
+                                        Log.w(TAG, "退出处理器尚未安装，直接结束进程")
+                                        exitProcess(0)
+                                    }
+                                }
+                            }
+                            // true = 中止 JCEF 默认 shutdown，由应用按顺序关闭浏览器和 CefApp
+                            return true
+                        }
+
+                        override fun stateHasChanged(state: CefAppState) {
+                            if (state == CefAppState.TERMINATED ||
+                                state == CefAppState.INITIALIZATION_FAILED
+                            ) {
+                                browserReady = false
+                                cefApp = null
+                                initFailure = IllegalStateException("JCEF state: $state")
+                                Log.w(TAG, "JCEF 全局状态变为 $state")
+                            }
+                        }
+                    })
                     val settings = builder.getCefSettings()
                     // 发布包只随带 locales/zh-CN.pak（见 tools/JcefNativesPacker.kt），
                     // 这里显式指定 locale，避免按系统语言去找不存在的语言包
@@ -117,6 +162,42 @@ object JcefHolder {
     }
 
     fun app(): CefApp? = cefApp
+
+    /**
+     * 登录页创建浏览器前调用。若 CEF 已被外部终止，重新建立全局实例，
+     * 避免继续把 TERMINATED 的 CefApp 交给 UI。
+     */
+    fun ensureUsable(): CefApp? {
+        val state = CefApp.getState()
+        if (state == CefAppState.TERMINATED ||
+            state == CefAppState.SHUTTING_DOWN ||
+            state == CefAppState.INITIALIZATION_FAILED
+        ) {
+            // CefApp 的状态是 JVM 级单例，进入 TERMINATED 后无法在同一进程内重建。
+            // 正常路径已由 onBeforeTerminate 拦截；这里只负责给出明确失败状态，
+            // 避免继续拿不可用的实例去 createClient()。
+            val error = IllegalStateException("JCEF 已不可用（$state）")
+            if (initFailure == null) initFailure = error
+            browserReady = false
+            cefApp = null
+            Log.e(TAG, "JCEF 无法在当前进程内恢复：$state")
+            return null
+        }
+        val current = cefApp
+        if (current != null) {
+            if (state == CefAppState.NEW ||
+                state == CefAppState.INITIALIZING ||
+                state == CefAppState.INITIALIZED
+            ) {
+                return current
+            }
+        }
+        if (!browserReady) {
+            initBlocking()
+            return cefApp
+        }
+        return current
+    }
 
     fun isAvailable(): Boolean = browserReady
 

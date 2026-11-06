@@ -1,7 +1,28 @@
 package com.yunx.app.util
 
+import java.awt.BasicStroke
+import java.awt.BorderLayout
+import java.awt.Color
+import java.awt.FlowLayout
+import java.awt.Font
+import java.awt.Graphics
+import java.awt.Graphics2D
+import java.awt.GraphicsEnvironment
+import java.awt.Rectangle
+import java.awt.RenderingHints
+import java.awt.event.KeyEvent
 import java.io.File
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
+import javax.swing.AbstractAction
+import javax.swing.JButton
+import javax.swing.JComponent
+import javax.swing.JFrame
+import javax.swing.JLabel
+import javax.swing.JPanel
+import javax.swing.KeyStroke
+import javax.swing.SwingUtilities
 
 /**
  * 「主窗口位置」遮罩选择器：调起 C# 原生遮罩进程 `YunX-PositionPicker.exe`。
@@ -41,6 +62,9 @@ object PositionPicker {
         colorRgb: Int,
         reduceMotion: Boolean
     ): Position? {
+        if (isMac()) {
+            return pickMac(boxWidth, boxHeight, initialX, initialY, colorRgb)
+        }
         val resolved = resolveExe()
         if (resolved == null) {
             Log.w(TAG, "未找到 $EXE_NAME，无法设置主窗口位置（jar 内 yunx/$EXE_NAME 资源缺失，且开发态 build\\ 下也没有）")
@@ -77,6 +101,136 @@ object PositionPicker {
             // 从 jar 一次性释放出来的临时 exe：遮罩一退出立即销毁
             if (resolved.temporary) deleteQuietly(resolved.exe)
         }
+    }
+
+    /**
+     * macOS 原生遮罩：全屏半透明 Swing 窗口，拖动站位框后保存。
+     * macOS 上 Compose 的透明窗口同样不可靠，因此用不透明暗色遮罩 + 自定义绘制。
+     */
+    private fun pickMac(
+        boxWidth: Int,
+        boxHeight: Int,
+        initialX: Int,
+        initialY: Int,
+        colorRgb: Int
+    ): Position? {
+        val result = AtomicReference<Position?>(null)
+        val done = CountDownLatch(1)
+        SwingUtilities.invokeLater {
+            val virtual = GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices
+                .map { it.defaultConfiguration.bounds }
+                .reduceOrNull { a, b -> a.union(b) }
+                ?: Rectangle(0, 0, 1440, 900)
+            val width = boxWidth.coerceAtLeast(320)
+            val height = boxHeight.coerceAtLeast(240)
+            val startX = initialX.coerceIn(virtual.x, virtual.x + (virtual.width - width).coerceAtLeast(0))
+            val startY = initialY.coerceIn(virtual.y, virtual.y + (virtual.height - height).coerceAtLeast(0))
+            val frame = JFrame("设置主窗口位置")
+            frame.isUndecorated = true
+            frame.defaultCloseOperation = JFrame.DISPOSE_ON_CLOSE
+            frame.bounds = virtual
+            frame.isAlwaysOnTop = true
+            frame.background = Color(10, 12, 18)
+
+            val accent = Color((colorRgb shr 16) and 0xFF, (colorRgb shr 8) and 0xFF, colorRgb and 0xFF)
+            val overlay = object : JPanel(null) {
+                var box = Rectangle(startX - virtual.x, startY - virtual.y, width, height)
+                var dragOffsetX = 0
+                var dragOffsetY = 0
+
+                init {
+                    isOpaque = true
+                    background = Color(10, 12, 18)
+                    addMouseListener(object : java.awt.event.MouseAdapter() {
+                        override fun mousePressed(e: java.awt.event.MouseEvent) {
+                            dragOffsetX = e.x - box.x
+                            dragOffsetY = e.y - box.y
+                        }
+                    })
+                    addMouseMotionListener(object : java.awt.event.MouseMotionAdapter() {
+                        override fun mouseDragged(e: java.awt.event.MouseEvent) {
+                            box.x = (e.x - dragOffsetX)
+                                .coerceIn(0, (size.width - box.width).coerceAtLeast(0))
+                            box.y = (e.y - dragOffsetY)
+                                .coerceIn(0, (size.height - box.height).coerceAtLeast(0))
+                            repaint()
+                        }
+                    })
+                }
+
+                override fun paintComponent(g: Graphics) {
+                    super.paintComponent(g)
+                    val g2 = g.create() as Graphics2D
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                    g2.color = Color(4, 7, 12, 170)
+                    g2.fillRect(0, 0, width, height)
+                    g2.color = Color(255, 255, 255, 210)
+                    g2.font = Font(Font.SANS_SERIF, Font.BOLD, 16)
+                    g2.drawString("拖动窗口框到主窗口下次出现的位置", 24, 34)
+                    g2.font = Font(Font.SANS_SERIF, Font.PLAIN, 13)
+                    g2.color = Color(210, 215, 225)
+                    g2.drawString("Enter 保存 · Esc 取消 · 鼠标拖动调整", 24, 56)
+
+                    g2.color = accent
+                    g2.stroke = BasicStroke(3f)
+                    g2.drawRoundRect(box.x, box.y, box.width, box.height, 14, 14)
+                    g2.color = Color(accent.red, accent.green, accent.blue, 42)
+                    g2.fillRoundRect(box.x, box.y, box.width, box.height, 14, 14)
+                    val tip = "云析主窗口 ${box.x + virtual.x}, ${box.y + virtual.y}"
+                    g2.color = Color.WHITE
+                    g2.font = Font(Font.SANS_SERIF, Font.BOLD, 14)
+                    g2.drawString(tip, box.x + 18, box.y + 28)
+                    g2.dispose()
+                }
+            }
+
+            fun save() {
+                result.set(Position(overlay.box.x + virtual.x, overlay.box.y + virtual.y))
+                frame.dispose()
+                done.countDown()
+            }
+
+            fun cancel() {
+                frame.dispose()
+                done.countDown()
+            }
+
+            val bar = JPanel(FlowLayout(FlowLayout.CENTER, 10, 8)).apply {
+                isOpaque = false
+                add(JLabel("设置主窗口启动位置").apply {
+                    foreground = Color(235, 238, 245)
+                    font = font.deriveFont(Font.PLAIN, 13f)
+                })
+                add(JButton("取消").apply { addActionListener { cancel() } })
+                add(JButton("保存位置").apply { addActionListener { save() } })
+            }
+            overlay.add(bar).apply {
+                setBounds(
+                    (virtual.width / 2 - 190).coerceAtLeast(16),
+                    virtual.height - 68,
+                    380,
+                    48
+                )
+            }
+
+            val root = JPanel(BorderLayout()).apply { add(overlay, BorderLayout.CENTER) }
+            frame.contentPane = root
+            frame.rootPane.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
+                .put(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "cancel")
+            frame.rootPane.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
+                .put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), "save")
+            frame.rootPane.actionMap.put("cancel", object : AbstractAction() {
+                override fun actionPerformed(e: java.awt.event.ActionEvent?) = cancel()
+            })
+            frame.rootPane.actionMap.put("save", object : AbstractAction() {
+                override fun actionPerformed(e: java.awt.event.ActionEvent?) = save()
+            })
+            frame.isVisible = true
+            frame.toFront()
+            frame.requestFocus()
+        }
+        done.await()
+        return result.get()
     }
 
     /** 解析结果：[temporary] 为 true 表示该 exe 是从 jar 一次性释放的，用完必须删除 */
@@ -122,4 +276,8 @@ object PositionPicker {
         }
         return list
     }
+
+    private fun isMac(): Boolean =
+        System.getProperty("os.name").orEmpty().lowercase()
+            .let { it.contains("mac") || it.contains("darwin") }
 }

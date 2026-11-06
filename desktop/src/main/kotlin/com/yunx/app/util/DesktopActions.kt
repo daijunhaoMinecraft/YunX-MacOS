@@ -62,6 +62,12 @@ object DesktopActions {
     fun revealFile(path: String): Boolean {
         val file = File(path)
         if (!file.exists()) return false
+        if (WindowsTitleBar.isMac) {
+            return runCatching {
+                ProcessBuilder("open", "-R", file.absolutePath).start()
+                true
+            }.getOrDefault(false)
+        }
         if (WindowsTitleBar.isWindows) {
             // 返回 HINSTANCE：> 32 表示成功（<= 32 是错误码），失败再退回命令行方式
             val ret = runCatching {
@@ -82,6 +88,12 @@ object DesktopActions {
     fun openDirectory(path: String): Boolean {
         val dir = File(path)
         if (!dir.isDirectory && !dir.mkdirs()) return false
+        if (WindowsTitleBar.isMac) {
+            return runCatching {
+                ProcessBuilder("open", dir.absolutePath).start()
+                true
+            }.getOrDefault(false)
+        }
         return runCatching {
             ProcessBuilder("explorer.exe", dir.absolutePath).start()
             true
@@ -118,6 +130,16 @@ object DesktopActions {
      * 拿不到启动器 exe（开发运行 `gradle run`）时返回 false，由调用方提示手动重启。
      */
     fun restartApp(): Boolean {
+        if (WindowsTitleBar.isMac) {
+            val app = macAppBundle() ?: return false
+            return runCatching {
+                ProcessBuilder(
+                    "sh", "-c",
+                    "sleep 2; open -n \"${app.absolutePath.replace("\"", "\\\"")}\""
+                ).start()
+                true
+            }.getOrDefault(false)
+        }
         val exe = launcherExe() ?: return false
         return runCatching {
             // 用 cmd 延迟启动：本进程马上就会退出，必须等它把文件句柄都放掉。
@@ -134,12 +156,21 @@ object DesktopActions {
      * 关闭计算机（「下载完成后关机」用）。
      *
      * 走系统 shutdown 命令：普通用户本地关机不需要管理员权限（SeShutdownPrivilege），
-     * 调用方无需提权。非 Windows 直接返回 false（本功能目前仅在桌面端 Windows 提供）。
+     * 调用方无需提权。macOS 通过 System Events 发起关机。
      *
      * @param seconds 关机前延迟秒数（0 = 立即关机）；调用方负责在倒计时期间决定是否取消
      * @return 是否成功发起
      */
     fun shutdownComputer(seconds: Int = 0): Boolean {
+        if (WindowsTitleBar.isMac) {
+            return runCatching {
+                ProcessBuilder(
+                    "osascript", "-e",
+                    "tell application \"System Events\" to shut down"
+                ).start()
+                true
+            }.getOrDefault(false)
+        }
         if (!WindowsTitleBar.isWindows) return false
         return runCatching {
             ProcessBuilder("shutdown", "/s", "/t", seconds.coerceAtLeast(0).toString()).start()
@@ -153,6 +184,18 @@ object DesktopActions {
             File(p).takeIf { it.isFile }?.let { return it }
         }
         return File(File(System.getProperty("user.dir") ?: "."), "YunX-Desktop.exe").takeIf { it.isFile }
+    }
+
+    private fun macAppBundle(): File? {
+        System.getProperty("jpackage.app-path")?.let { path ->
+            val marker = "${File.separator}.app${File.separator}"
+            val index = path.indexOf(marker)
+            if (index >= 0) {
+                return File(path.substring(0, index + 5)).takeIf { it.isDirectory }
+            }
+        }
+        return File(System.getProperty("user.dir") ?: ".", "YunX-Desktop.app")
+            .takeIf { it.isDirectory }
     }
 
     /** 用系统默认浏览器打开链接 */
@@ -178,9 +221,9 @@ object DesktopActions {
         val isMac = osName.contains("mac") || osName.contains("darwin")
 
         if (isMac) {
+            System.setProperty("apple.awt.fileDialogForDirectories", "true")
             val dialog = FileDialog(null as Frame?, "选择文件夹", FileDialog.LOAD)
             dialog.isMultipleMode = false
-            System.setProperty("apple.awt.fileDialogForDirectories", "true")
             dialog.isVisible = true
             val dir = dialog.directory
             val file = dialog.file

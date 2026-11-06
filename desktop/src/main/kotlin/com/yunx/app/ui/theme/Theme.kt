@@ -104,11 +104,7 @@ fun ComposeEmptyActivityTheme(
         1 -> false
         2 -> true
         else ->
-            if (com.yunx.app.util.WindowsTitleBar.isWindows) {
-                com.yunx.app.util.WindowsTitleBar.systemIsDarkMode()
-            } else {
-                darkTheme
-            }
+            com.yunx.app.util.WindowsTitleBar.systemIsDarkMode()
     }
     val colorScheme = when {
         // 桌面无动态取色（0 与 1 等价，回退默认蓝色）

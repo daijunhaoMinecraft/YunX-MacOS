@@ -25,7 +25,6 @@ import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Code
-import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Link
@@ -111,8 +110,8 @@ fun AboutScreen(
                 description = "云析（YunX）是一款网盘分享链接 + 视频链接解析与高速下载工具。" +
                     "粘贴分享链接或视频短链，登录账号后即可浏览内容、在线预览并直接高速下载；" +
                     "也支持磁力 / BT 种子 / ed2k 等 P2P 链接下载。\n" +
-                    "Windows 桌面端：YunX-Desktop 基于 Compose Multiplatform 构建，" +
-                    "在安卓版能力之上补齐桌面交互（右键菜单、文件夹整夹下载、可拖动窗口）。"
+                    "macOS 社区移植：YunX-MacOS 基于官方 Windows 桌面版与 Compose Multiplatform 构建，" +
+                    "适配 Finder、菜单栏托盘、钥匙串与原生文件对话框。"
             )
             
 
@@ -598,7 +597,7 @@ private fun GitHubCard() {
 private fun DesktopRepoCard() {
     Card(
         onClick = {
-            DesktopActions.openUrl("https://github.com/tidain/YunX-Desktop")
+            DesktopActions.openUrl("https://github.com/daijunhaoMinecraft/YunX-MacOS")
         },
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
@@ -619,7 +618,7 @@ private fun DesktopRepoCard() {
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
-                        imageVector = Icons.Outlined.DesktopWindows,
+                        imageVector = Icons.Outlined.Code,
                         contentDescription = null,
                         modifier = Modifier.size(20.dp),
                         tint = MaterialTheme.colorScheme.onTertiaryContainer
@@ -629,12 +628,12 @@ private fun DesktopRepoCard() {
             Spacer(modifier = Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "PC 版仓库",
+                    text = "macOS 版仓库",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Medium
                 )
                 Text(
-                    text = "github.com/tidain/YunX-Desktop",
+                    text = "github.com/daijunhaoMinecraft/YunX-MacOS",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

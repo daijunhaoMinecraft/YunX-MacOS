@@ -133,18 +133,29 @@ fun EngineInstallPromptHost() {
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "下载 FFmpeg 精简版（约 50–90MB）到本应用私有目录：只给本应用使用，" +
-                            "不会改动系统环境变量。",
+                        text = if (FfplayManager.supportsManagedDownload()) {
+                            "下载 FFmpeg 精简版（约 50–90MB）到本应用私有目录：只给本应用使用，" +
+                                "不会改动系统环境变量。"
+                        } else {
+                            "macOS 推荐通过 Homebrew 安装：在终端执行 brew install ffmpeg。" +
+                                "安装后重新打开预览即可自动识别 ffplay / ffmpeg / ffprobe。"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             },
             confirmButton = {
-                Button(onClick = {
-                    EngineInstallPrompt.dismiss()
-                    EngineInstallPrompt.startDownload(scope)
-                }) { Text("下载引擎") }
+                if (FfplayManager.supportsManagedDownload()) {
+                    Button(onClick = {
+                        EngineInstallPrompt.dismiss()
+                        EngineInstallPrompt.startDownload(scope)
+                    }) { Text("下载引擎") }
+                } else {
+                    TextButton(onClick = {
+                        com.yunx.app.util.DesktopActions.openUrl("https://brew.sh/")
+                    }) { Text("打开 Homebrew 官网") }
+                }
             },
             dismissButton = {
                 TextButton(onClick = { EngineInstallPrompt.dismiss() }) { Text("暂不") }

@@ -55,6 +55,12 @@ object WindowsTitleBar {
         System.getProperty("os.name", "").lowercase().contains("win")
     }
 
+    val isMac: Boolean by lazy {
+        System.getProperty("os.name", "").lowercase().let {
+            it.contains("mac") || it.contains("darwin")
+        }
+    }
+
     /** 当前期望的深色状态（之后新开的窗口在显示事件里自动套用） */
     @Volatile
     private var desiredDark: Boolean = false
@@ -148,6 +154,14 @@ object WindowsTitleBar {
      * 的 AppsUseLightTheme 值判断：0=深色，1=浅色，未配置时默认浅色。
      */
     fun systemIsDarkMode(): Boolean {
+        if (isMac) {
+            return runCatching {
+                val process = ProcessBuilder("defaults", "read", "-g", "AppleInterfaceStyle").start()
+                val value = process.inputStream.bufferedReader().readText().trim()
+                process.waitFor()
+                value.equals("Dark", ignoreCase = true)
+            }.getOrDefault(false)
+        }
         if (!isWindows) return false
         return runCatching {
             val key = "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"

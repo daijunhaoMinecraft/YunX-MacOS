@@ -14,13 +14,16 @@ import java.util.concurrent.atomic.AtomicLong
  * - 常驻 PowerShell 子进程持有 WinRT ToastNotificationManager，Kotlin 通过 stdin 逐行喂进度；
  * - AUMID 注册在 HKCU\Software\Classes\AppUserModelId\YunX.Desktop（通知显示「云析」与应用图标）；
  * - 同 tag/group 重发会原地替换 Action Center 里的既有 toast（进度条原地刷新，不刷屏）。
- * 非 Windows 平台全部 no-op。
+ * macOS 使用 `osascript` 发送完成通知；进度仍显示在应用窗口内。
+ * 其它非 Windows 平台全部 no-op。
  */
 object WindowsToastNotifier {
     private const val AUMID = "YunX.Desktop"
     private const val UPDATE_THROTTLE_MS = 1000L
 
     private val isWindows = System.getProperty("os.name").lowercase().contains("win")
+    private val isMac = System.getProperty("os.name").lowercase()
+        .let { it.contains("mac") || it.contains("darwin") }
     /** 测试/无头环境可关闭通知交互（默认开启；不影响下载本身） */
     @Volatile
     var enabled: Boolean = true
@@ -87,6 +90,11 @@ object WindowsToastNotifier {
     @Synchronized
     fun sessionStart() {
         if (!enabled) return
+        if (isMac) {
+            lastDoneSum = 0
+            lastTotalSum = 0
+            return
+        }
         if (!isWindows) return
         if (proc?.isAlive == true) return
         if (!starting.compareAndSet(false, true)) return
@@ -147,6 +155,13 @@ object WindowsToastNotifier {
     @Synchronized
     fun sessionEnd() {
         if (!enabled) return
+        if (isMac) {
+            val completed = lastTotalSum > 0 && lastDoneSum >= lastTotalSum
+            lastDoneSum = 0
+            lastTotalSum = 0
+            if (completed) sendMacCompletionNotification()
+            return
+        }
         if (!isWindows) return
         val completed = lastTotalSum > 0 && lastDoneSum >= lastTotalSum
         lastDoneSum = 0; lastTotalSum = 0
@@ -158,6 +173,23 @@ object WindowsToastNotifier {
             closeQuietly()
         }
     }
+
+    private fun sendMacCompletionNotification() {
+        val title = appleScriptString("云析")
+        val message = appleScriptString("全部任务已下载完毕")
+        runCatching {
+            ProcessBuilder(
+                "osascript", "-e",
+                "display notification \"$message\" with title \"$title\""
+            )
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .redirectError(ProcessBuilder.Redirect.DISCARD)
+                .start()
+        }.onFailure { Log.w(TAG, "macOS 通知发送失败：${it.message}") }
+    }
+
+    private fun appleScriptString(value: String): String =
+        value.replace("\\", "\\\\").replace("\"", "\\\"")
 
     private fun sendLine(line: String) {
         try {

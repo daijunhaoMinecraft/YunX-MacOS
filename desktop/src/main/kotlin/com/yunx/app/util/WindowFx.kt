@@ -87,11 +87,30 @@ object WindowFx {
      * 完成后回 EDT 隐藏窗口并执行回调。
      */
     fun fadeOutThen(frame: java.awt.Frame, onDone: () -> Unit) {
+        if (WindowsTitleBar.isMac) {
+            // 重复的退出请求直接忽略，避免第一段淡出尚未结束时提前 exitApplication。
+            if (!fading.compareAndSet(false, true)) return
+            Thread {
+                runCatching {
+                    for (step in 14 downTo 1) {
+                        val alpha = step / 14f
+                        EventQueue.invokeAndWait { runCatching { frame.opacity = alpha } }
+                        Thread.sleep(12)
+                    }
+                }
+                EventQueue.invokeLater { onDone() }
+            }.apply {
+                isDaemon = true
+                name = "window-fade-out-macos"
+            }.start()
+            return
+        }
         val api = user32Native
-        if (api == null || !fading.compareAndSet(false, true)) {
+        if (api == null) {
             onDone()
             return
         }
+        if (!fading.compareAndSet(false, true)) return
         val title = frame.title
         Thread {
             runCatching {

@@ -939,9 +939,9 @@ private fun levelDescription(level: DbEncryptionLevel, supported: Boolean): Stri
     DbEncryptionLevel.NORMAL ->
         "库明文 · 凭证列加密 · 密钥用本机派生密钥包裹（绑定本机，换机器解不开）"
     DbEncryptionLevel.STRICT ->
-        "库明文 · 凭证列加密 · 密钥用 Windows DPAPI 保护（绑定当前 Windows 用户）"
+        "库明文 · 凭证列加密 · 密钥用${secureKeyStoreName()}保护（绑定当前用户）"
     DbEncryptionLevel.STRICTEST ->
-        if (supported) "库整体加密 + DPAPI 保护密钥" else "库整体加密（SQLCipher）—— 暂未支持"
+        if (supported) "库整体加密 + ${secureKeyStoreName()}保护密钥" else "库整体加密（SQLCipher）—— 暂未支持"
 }
 
 /** 切换档位前的后果提示 */
@@ -954,11 +954,16 @@ private fun levelWarning(target: DbEncryptionLevel): String = when (target) {
             "⚠ 之后把数据库/密钥拷到别的电脑、或重装系统，凭证将无法解密（表现为网盘账号全部未登录，需重新登录）。\n" +
             "如果需要便携使用，请保持「宽松」。"
     DbEncryptionLevel.STRICT ->
-        "密钥将用 **Windows DPAPI** 保护：绑定当前 Windows 用户。\n" +
-            "⚠ 换 Windows 用户、重装系统或换机器后，凭证将无法解密（需重新登录）。\n" +
+        "密钥将用 **${secureKeyStoreName()}** 保护：绑定当前系统用户。\n" +
+            "⚠ 换系统用户、重装系统或换机器后，凭证将无法解密（需重新登录）。\n" +
             "如果需要便携使用，请保持「宽松」。"
     DbEncryptionLevel.STRICTEST ->
         "该档需要 SQLCipher 原生库支持，当前版本暂未实现。"
+}
+
+private fun secureKeyStoreName(): String {
+    val os = System.getProperty("os.name").orEmpty().lowercase()
+    return if (os.contains("mac") || os.contains("darwin")) " macOS 钥匙串" else " Windows DPAPI"
 }
 
 /** 自定义目录：原生目录选择器必须在 IO 线程打开（阻塞式模态对话框，直接跑会卡住 UI） */

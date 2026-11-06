@@ -26,6 +26,7 @@ import com.yunx.app.util.SingleInstance
 import com.yunx.app.util.TrayManager
 import com.yunx.app.util.Win32PopupMenu
 import com.yunx.app.util.WindowFx
+import com.yunx.app.util.WindowsTitleBar
 import androidx.compose.ui.graphics.toComposeImageBitmap
 
 // WindowExceptionHandler 在 Compose 1.7 仍标注为实验 API；本项目锁 1.7.3，用它是为了
@@ -169,6 +170,16 @@ fun main(args: Array<String>) {
         var closeRequested by remember { mutableStateOf(false) }
         // 抑制关闭请求：程序化隐藏窗口（最小化到托盘）时为 true，避免 onCloseRequest 重跑导致弹窗闪烁
         var suppressCloseRequest by remember { mutableStateOf(false) }
+        // Cmd+Q、托盘退出、界面退出可能并发触发，只执行一次完整退出流程
+        val quitting = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+        val requestExit = {
+            if (quitting.compareAndSet(false, true)) {
+                saveWindowPosition(mainWindow)
+                val w = mainWindow
+                if (w != null) WindowFx.fadeOutThen(w) { exitApplication() }
+                else exitApplication()
+            }
+        }
         // 启动器闪屏模式（launcher 注入 YUNXPC_SPLASH=1）：窗口可见性由 Compose 控制，
         // WindowFx 在窗口显示瞬间把透明度压到 0，内容首帧就绪后渐入，与闪屏淡出交叉衔接。
         // 注意：不能用 Window(visible=false) + 外部 setVisible(true)——Compose 状态同步会
@@ -249,6 +260,8 @@ fun main(args: Array<String>) {
                 com.yunx.app.ui.components.PreviewFullscreen.window = window
                 // 剪贴板分享链接弹窗：主窗口引用用于「主窗口失焦时才弹」判断 + 「打开」时切回前台
                 ClipboardLinkController.mainWindow = mainWindow
+                // macOS Cmd+Q：JCEF 会先收到终止通知，转交给 Compose 执行完整退出流程
+                JcefHolder.terminateHandler = requestExit
             }
             // 「上次关闭位置」/「自定义」还原：用 AWT 屏幕像素坐标，避开 WindowState 的 dp/density 换算。
             // 只在启动时执行一次；记录的坐标不可见（如副屏被拔掉）时不动，交给平台默认位置。
@@ -274,31 +287,30 @@ fun main(args: Array<String>) {
                     (window as? java.awt.Frame)?.let { WindowFx.scheduleFadeIn(it) }
                 }
             }
-            // 系统托盘：JNA 调 Win32 TrackPopupMenu（原生菜单，中文正常，暗色跟随系统）
+            // 系统托盘：Windows 用 Win32 原生菜单，macOS 用 AWT 系统托盘菜单
             androidx.compose.runtime.LaunchedEffect(Unit) {
                 TrayManager.loadTrayIcon()?.let { icon ->
                     TrayManager.install(
                         image = icon,
                         onLeftClick = { DesktopActions.bringWindowToFront(mainWindow) },
                         onRightClick = { x, y ->
-                            val cmd = Win32PopupMenu.show(
-                                items = listOf(
-                                    "显示主窗口" to 1,
-                                    "-" to 0,
-                                    "退出" to 2
-                                ),
-                                x = x, y = y
-                            )
-                            when (cmd) {
-                                1 -> DesktopActions.bringWindowToFront(mainWindow)
-                                2 -> {
-                                    saveWindowPosition(mainWindow)
-                                    val w = mainWindow
-                                    if (w != null) WindowFx.fadeOutThen(w) { exitApplication() }
-                                    else exitApplication()
+                            if (WindowsTitleBar.isWindows) {
+                                val cmd = Win32PopupMenu.show(
+                                    items = listOf(
+                                        "显示主窗口" to 1,
+                                        "-" to 0,
+                                        "退出" to 2
+                                    ),
+                                    x = x, y = y
+                                )
+                                when (cmd) {
+                                    1 -> DesktopActions.bringWindowToFront(mainWindow)
+                                    2 -> requestExit()
                                 }
                             }
-                        }
+                        },
+                        onShowMac = { DesktopActions.bringWindowToFront(mainWindow) },
+                        onExitMac = requestExit
                     )
                 }
             }
@@ -306,12 +318,7 @@ fun main(args: Array<String>) {
                 MainScreen(
                     closeRequested = closeRequested,
                     onCloseHandled = { closeRequested = false },
-                    onExitApplication = {
-                        saveWindowPosition(mainWindow)
-                        val w = mainWindow
-                        if (w != null) WindowFx.fadeOutThen(w) { exitApplication() }
-                        else exitApplication()
-                    },
+                    onExitApplication = requestExit,
                     onMinimizeToTray = {
                         // 记录当前窗口位置，再隐藏（下次启动「上次关闭位置」可还原）
                         saveWindowPosition(mainWindow)

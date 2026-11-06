@@ -92,8 +92,8 @@ import kotlinx.coroutines.withContext
  *
  * 只影响**新任务**由谁执行；已有任务保持原归属（已在下载中的引擎任务继续由引擎跑完）。
  *
- * 视频预览引擎（实验性）：ffplay 由 FFmpeg 精简版提供，**不随包发布** → 这里提供在线下载/
- * 更新；本机 PATH 或常见目录已装 FFmpeg 时会自动命中，无需下载。
+ * 视频预览引擎（实验性）：Windows 可从应用内下载 FFmpeg 精简版；macOS 通过 Homebrew /
+ * PATH / 常见目录自动探测 ffplay 与 ffmpeg。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -134,6 +134,7 @@ fun DownloadEngineScreen(
     // 私有目录里是否有本应用下载的 FFmpeg（决定显示「卸载」）+ 卸载确认
     var ffmpegPrivate by remember { mutableStateOf(FfplayManager.hasPrivateInstall()) }
     var showFfmpegUninstallConfirm by remember { mutableStateOf(false) }
+    val managedFfmpeg = FfplayManager.supportsManagedDownload()
 
     BackHandler { onBack() }
 
@@ -203,13 +204,13 @@ fun DownloadEngineScreen(
         provisionJob?.cancel()
     }
 
-    /** 导入本地内核（官方 zip 或裸 gopeed.exe） */
+    /** 导入本地内核（官方 zip 或裸 gopeed / gopeed.exe） */
     fun importKernel() {
         scope.launch {
             val path = withContext(Dispatchers.IO) {
                 DesktopActions.pickFile(
                     filters = listOf(
-                        "Gopeed 内核 (*.zip;*.exe)" to "*.zip;*.exe",
+                        "Gopeed 内核 (*.zip)" to "*.zip",
                         "所有文件 (*.*)" to "*.*"
                     )
                 )
@@ -391,7 +392,7 @@ fun DownloadEngineScreen(
                             kernelVersion?.let { append(" · 核心版本 $it") }
                         }
                     } else {
-                        "未导入（需要官方 windows 版内核）"
+                        "未导入（需要官方 Gopeed web 内核）"
                     }
                 )
                 Spacer(Modifier.height(6.dp))
@@ -417,7 +418,7 @@ fun DownloadEngineScreen(
                     ) {
                         Icon(Icons.Outlined.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("导入本地内核（.zip / .exe）")
+                        Text("导入本地内核（.zip / 可执行文件）")
                     }
                 } else {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -573,8 +574,13 @@ fun DownloadEngineScreen(
                     }
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "影响解析页的在线预览与哔哩哔哩等分轨视频的合轨。FFplay 由 FFmpeg 精简版提供，" +
-                            "不随安装包发布，需要在这里下载；本机已装 FFmpeg（PATH / 常见目录）时会自动命中。",
+                        text = if (managedFfmpeg) {
+                            "影响解析页的在线预览与哔哩哔哩等分轨视频的合轨。FFplay 由 FFmpeg 精简版提供，" +
+                                "不随安装包发布，需要在这里下载；本机已装 FFmpeg（PATH / 常见目录）时会自动命中。"
+                        } else {
+                            "影响解析页的在线预览与哔哩哔哩等分轨视频的合轨。macOS 请先安装 Homebrew，" +
+                                "再执行 brew install ffmpeg；本页会自动探测 ffplay / ffmpeg / ffprobe。"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -603,10 +609,37 @@ fun DownloadEngineScreen(
                     }
 
                     Spacer(Modifier.height(10.dp))
-                    KeyValueRow("FFplay 状态", ffplayPath ?: "未检测到（可下载 FFmpeg 精简版，约 50–90MB）")
+                    KeyValueRow(
+                        "FFplay 状态",
+                        ffplayPath ?: if (managedFfmpeg) {
+                            "未检测到（可下载 FFmpeg 精简版，约 50–90MB）"
+                        } else {
+                            "未检测到（请执行 brew install ffmpeg）"
+                        }
+                    )
 
                     Spacer(Modifier.height(14.dp))
-                    if (ffmpegDownloading) {
+                    if (!managedFfmpeg && !ffmpegDownloading) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Button(
+                                onClick = {
+                                    com.yunx.app.util.DesktopActions.openUrl("https://brew.sh/")
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) { Text("打开 Homebrew 官网") }
+                            Spacer(Modifier.width(8.dp))
+                            OutlinedButton(onClick = {
+                                ffplayPath = FfplayManager.currentPath()
+                                SnackbarController.show(
+                                    if (ffplayPath == null) "仍未检测到 FFplay，请确认已执行 brew install ffmpeg"
+                                    else "已检测到 FFplay"
+                                )
+                            }) { Text("重新检测") }
+                        }
+                    } else if (ffmpegDownloading) {
                         LinearProgressIndicator(
                             progress = {
                                 if (ffmpegTotal > 0) {
@@ -787,7 +820,7 @@ fun DownloadEngineScreen(
                     ) {
                         Icon(Icons.Outlined.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text("导入本地内核（.zip / .exe）")
+                        Text("导入本地内核（.zip / 可执行文件）")
                     }
                 }
             },

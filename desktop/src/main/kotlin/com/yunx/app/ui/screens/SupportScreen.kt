@@ -303,8 +303,8 @@ fun SupportScreen(
             // ---------- PC 版仓库入口 ----------
             OutlinedButton(
                 onClick = {
-                    DesktopActions.openUrl("https://github.com/tidain/YunX-Desktop")
-                    SnackbarController.show("已打开 PC 版仓库")
+                    DesktopActions.openUrl("https://github.com/daijunhaoMinecraft/YunX-MacOS")
+                    SnackbarController.show("已打开 macOS 版仓库")
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -316,7 +316,7 @@ fun SupportScreen(
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("PC 版仓库")
+                Text("macOS 版仓库")
             }
         }
     }

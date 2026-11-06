@@ -40,8 +40,9 @@ import java.util.zip.ZipInputStream
  * 是真正的「边下边播」。
  *
  * 落地方式（用户拍板）：
- * - **只给本应用用**：优先使用应用私有目录 `<dataDir>/tools/ffmpeg/bin/ffplay.exe`，
- *   缺失时下载 ffmpeg 静态构建解包到这里，**绝不改动系统 PATH / 环境变量**；
+ * - **只给本应用用**：Windows 优先使用应用私有目录 `<dataDir>/tools/ffmpeg/bin/ffplay.exe`，
+ *   缺失时可下载 ffmpeg 静态构建解包到这里，**绝不改动系统 PATH / 环境变量**；
+ * - macOS 优先使用 Homebrew / PATH / `/usr/local/bin` 中已安装的 `ffplay`；
  * - 检测顺序：私有目录 → 系统 PATH → 常见安装目录（本机若已装 ffmpeg 会命中 PATH 分支）；
  * - 窗口形态：用 Win32 `SetParent` 把 ffplay 窗口嵌进应用窗口（见 [FfplayWindowFx]），
  *   嵌入失败或非 Windows 时降级为独立窗口。
@@ -50,10 +51,10 @@ object FfplayManager {
 
     private const val TAG = "YunX-Ffplay"
 
-    private const val EXE_NAME = "ffplay.exe"
+    private val exeName: String get() = if (isWindows()) "ffplay.exe" else "ffplay"
 
     /** DASH 合轨用到的可执行文件（与 ffplay 同包，一起解出来） */
-    private const val FFMPEG_EXE = "ffmpeg.exe"
+    private val ffmpegExeName: String get() = if (isWindows()) "ffmpeg.exe" else "ffmpeg"
 
     /** ffplay 默认 UA 是 `Lavf/...`，很多平台的 CDN 会因此 403，缺省补一个 Chrome UA */
     private const val DEFAULT_UA =
@@ -122,20 +123,26 @@ object FfplayManager {
     val installDir: File get() = File(AppContext.dataDir, "tools/ffmpeg")
 
     /** 私有目录下的 ffplay 可执行文件 */
-    val privateExe: File get() = File(installDir, "bin/$EXE_NAME")
+    val privateExe: File get() = File(installDir, "bin/$exeName")
 
     /** 私有目录下的 ffmpeg 可执行文件（DASH 合轨用） */
-    private val privateFfmpeg: File get() = File(installDir, "bin/$FFMPEG_EXE")
+    private val privateFfmpeg: File get() = File(installDir, "bin/$ffmpegExeName")
 
     /** 常见安装目录（PATH 未命中时兜底） */
     private val commonDirs: List<File> = buildList {
-        System.getenv("ProgramFiles")?.let { add(File(it, "ffmpeg/bin")) }
-        System.getenv("ProgramFiles(x86)")?.let { add(File(it, "ffmpeg/bin")) }
-        System.getenv("LOCALAPPDATA")?.let {
-            add(File(it, "Microsoft/WinGet/Links"))
-            add(File(it, "Programs/ffmpeg/bin"))
+        if (isWindows()) {
+            System.getenv("ProgramFiles")?.let { add(File(it, "ffmpeg/bin")) }
+            System.getenv("ProgramFiles(x86)")?.let { add(File(it, "ffmpeg/bin")) }
+            System.getenv("LOCALAPPDATA")?.let {
+                add(File(it, "Microsoft/WinGet/Links"))
+                add(File(it, "Programs/ffmpeg/bin"))
+            }
+            add(File("C:/ffmpeg/bin"))
+        } else {
+            add(File("/opt/homebrew/bin"))
+            add(File("/usr/local/bin"))
+            add(File("/opt/local/bin"))
         }
-        add(File("C:/ffmpeg/bin"))
     }
 
     @Volatile
@@ -152,15 +159,16 @@ object FfplayManager {
 
     fun isWindows(): Boolean = WindowsTitleBar.isWindows
 
+    /** 是否支持在应用内下载私有 FFmpeg 副本（macOS 建议 Homebrew，避免覆盖系统文件） */
+    fun supportsManagedDownload(): Boolean = isWindows()
+
     /**
      * 定位可用的 ffplay（结果带缓存）。顺序：私有目录 → PATH → 常见安装目录。
-     * 非 Windows 直接返回 null（ffplay 嵌入方案仅 Windows 生效）。
      */
     @Synchronized
     fun locate(forceRefresh: Boolean = false): File? {
-        if (!isWindows()) return null
         if (!forceRefresh && checked) return cached
-        val found = detectExe(EXE_NAME, privateExe)
+        val found = detectExe(exeName, privateExe)
         cached = found
         checked = true
         return found
@@ -168,13 +176,11 @@ object FfplayManager {
 
     /**
      * 定位可用的 ffmpeg（结果带缓存），供 DASH 合轨使用。顺序同 [locate]。
-     * 非 Windows 返回 null（当前合轨兜底为纯 Java 实现，不受平台限制）。
      */
     @Synchronized
     fun locateFfmpeg(forceRefresh: Boolean = false): File? {
-        if (!isWindows()) return null
         if (!forceRefresh && checkedFfmpeg) return cachedFfmpeg
-        val found = detectExe(FFMPEG_EXE, privateFfmpeg)
+        val found = detectExe(ffmpegExeName, privateFfmpeg)
         cachedFfmpeg = found
         checkedFfmpeg = true
         return found
@@ -233,7 +239,11 @@ object FfplayManager {
      * 依次尝试 [candidates]，全部失败返回最后一个错误；协程取消会原样抛出。
      */
     suspend fun download(onProgress: (Long, Long) -> Unit = { _, _ -> }): Result<File> {
-        if (!isWindows()) return Result.failure(IOException("仅支持 Windows"))
+        if (!supportsManagedDownload()) {
+            return Result.failure(
+                IOException("macOS 不支持应用内下载 FFmpeg 精简版，请先执行 brew install ffmpeg")
+            )
+        }
         return withContext(Dispatchers.IO) {
             // OkHttp 的 execute() 是阻塞的、不响应协程取消；用「看门狗」子协程在取消瞬间
             // 把所有在飞 Call 一并 cancel()，否则用户点「取消下载」会毫无反应。
@@ -475,13 +485,13 @@ object FfplayManager {
                 if (name.contains("/bin/") && (lower.endsWith(".exe") || lower.endsWith(".dll"))) {
                     val outFile = File(outBin, name.substringAfterLast('/'))
                     outFile.outputStream().buffered().use { out -> zis.copyTo(out) }
-                    if (outFile.name.equals(EXE_NAME, ignoreCase = true)) found = true
+                    if (outFile.name.equals(exeName, ignoreCase = true)) found = true
                 }
                 zis.closeEntry()
             }
         }
         val exe = privateExe
-        if (!found || !exe.isFile) throw IOException("压缩包中未找到 ffplay.exe")
+        if (!found || !exe.isFile) throw IOException("压缩包中未找到 $exeName")
         return exe
     }
 

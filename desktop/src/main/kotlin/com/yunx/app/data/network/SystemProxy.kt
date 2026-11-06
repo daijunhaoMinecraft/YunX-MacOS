@@ -5,7 +5,9 @@ import com.sun.jna.platform.win32.WinReg
 import com.yunx.app.util.Log
 
 /**
- * Windows 系统代理解析：读取系统「Internet 选项」里配置的代理。
+ * 系统代理解析：
+ * - Windows：读取系统「Internet 选项」里配置的代理；
+ * - macOS：读取 `scutil --proxy` 的 HTTP / HTTPS / SOCKS 配置。
  *
  * 注册表位置：HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Internet Settings
  * - ProxyEnable(DWORD)：1=启用，0=未启用（缺失视为未启用）
@@ -14,7 +16,7 @@ import com.yunx.app.util.Log
  * - AutoConfigURL(字符串)：PAC 自动配置脚本地址，本实现不支持
  *
  * 说明：
- * - 非 Windows 平台一律视为不可用，调用方按直连处理。
+ * - 其它平台一律视为不可用，调用方按直连处理。
  * - 绕过列表（ProxyOverride）与 PAC 均不生效；PAC 会明确写日志，不静默降级。
  * - 本解析只在应用启动 / 用户修改代理设置时执行一次；运行中系统代理发生变化不会自动跟随。
  */
@@ -45,13 +47,18 @@ object SystemProxy {
     private val isWindows: Boolean
         get() = System.getProperty("os.name", "").lowercase().contains("win")
 
+    private val isMac: Boolean
+        get() = System.getProperty("os.name", "").lowercase()
+            .let { it.contains("mac") || it.contains("darwin") }
+
     /**
      * 读取本机系统代理并解析。返回 [Inspect.Proxy] 表示可用，其余一律按直连处理。
      * 调用方据此装配全局代理；本函数只读一次注册表。
      */
     fun inspect(): Inspect {
+        if (isMac) return inspectMac()
         if (!isWindows) {
-            Log.i(TAG, "非 Windows 平台，不支持系统代理，按直连处理")
+            Log.i(TAG, "当前平台不支持系统代理，按直连处理")
             return Inspect.Unavailable
         }
         val enable = readInt("ProxyEnable") ?: 0
@@ -59,6 +66,38 @@ object SystemProxy {
         val pac = readString("AutoConfigURL")
         val override = readString("ProxyOverride")
         return parse(enable, server, pac, override)
+    }
+
+    private fun inspectMac(): Inspect = runCatching {
+        val process = ProcessBuilder("/usr/sbin/scutil", "--proxy")
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader().use { it.readText() }
+        if (!process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)) process.destroyForcibly()
+        val values = output.lineSequence()
+            .mapNotNull { line ->
+                val match = MAC_PROXY_LINE.matchEntire(line) ?: return@mapNotNull null
+                match.groupValues[1] to match.groupValues[2].trim()
+            }
+            .toMap()
+        if (values["ProxyAutoConfigEnable"] == "1" || values["ProxyAutoDiscoveryEnable"] == "1") {
+            Log.w(TAG, "macOS 系统代理使用 PAC / 自动发现，本应用暂不支持，按直连处理")
+            return@runCatching Inspect.PacUnsupported
+        }
+        for (prefix in listOf("HTTP", "HTTPS", "SOCKS")) {
+            if (values["${prefix}Enable"] != "1") continue
+            val host = values["${prefix}Proxy"]?.trim().orEmpty()
+            val port = values["${prefix}Port"]?.toIntOrNull()
+            if (host.isNotBlank() && port != null && port in 1..65535) {
+                Log.i(TAG, "macOS 系统代理已启用：$host:$port（$prefix）")
+                return@runCatching Inspect.Proxy(host, port)
+            }
+        }
+        Log.i(TAG, "macOS 系统代理未启用，按直连处理")
+        Inspect.Direct
+    }.getOrElse {
+        Log.w(TAG, "读取 macOS 系统代理失败：${it.message}")
+        Inspect.Unavailable
     }
 
     /**
@@ -162,4 +201,6 @@ object SystemProxy {
 
     private fun readString(name: String): String? =
         runCatching { Advapi32Util.registryGetStringValue(WinReg.HKEY_CURRENT_USER, REG_KEY, name) }.getOrNull()
+
+    private val MAC_PROXY_LINE = Regex("""^\s*([A-Za-z][A-Za-z0-9]*)\s*:\s*(.+?)\s*$""")
 }

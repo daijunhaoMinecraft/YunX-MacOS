@@ -220,6 +220,8 @@ fun SettingsScreen(
     val systemProxyInfo = remember(proxyMode) {
         if (proxyMode == SettingsRepository.PROXY_MODE_SYSTEM) SystemProxy.inspect() else null
     }
+    val isMac = System.getProperty("os.name").orEmpty().lowercase()
+        .let { it.contains("mac") || it.contains("darwin") }
     // 用户体验与系统适配：下载时阻止休眠 / 通知中心进度
     var keepAwake by remember { mutableStateOf(settingsRepo.keepAwakeWhileDownloading) }
     var showSpeed by remember { mutableStateOf(settingsRepo.notificationShowSpeed) }
@@ -317,16 +319,18 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        SettingsItem(
-            icon = Icons.Outlined.Notifications,
-            title = "通知中心下载进度",
-            description = if (showSpeed) "Windows 通知中心进度条 + 下载速度" else "Windows 通知中心仅显示进度条（隐藏速度）",
-            onClick = {
-                showSpeed = !showSpeed
-                settingsRepo.notificationShowSpeed = showSpeed
-            },
-            trailing = { Switch(checked = showSpeed, onCheckedChange = null) }
-        )
+        if (!isMac) {
+            SettingsItem(
+                icon = Icons.Outlined.Notifications,
+                title = "通知中心下载进度",
+                description = if (showSpeed) "Windows 通知中心进度条 + 下载速度" else "Windows 通知中心仅显示进度条（隐藏速度）",
+                onClick = {
+                    showSpeed = !showSpeed
+                    settingsRepo.notificationShowSpeed = showSpeed
+                },
+                trailing = { Switch(checked = showSpeed, onCheckedChange = null) }
+            )
+        }
 
         Spacer(modifier = Modifier.height(8.dp))
 
@@ -1367,7 +1371,7 @@ fun SettingsScreen(
                         selected = tempMode == SettingsRepository.PROXY_MODE_SYSTEM,
                         onClick = { tempMode = SettingsRepository.PROXY_MODE_SYSTEM }
                     )
-                    // 系统代理模式：展示实际解析结果（读 Windows 系统代理设置）
+                    // 系统代理模式：展示实际解析结果
                     if (tempMode == SettingsRepository.PROXY_MODE_SYSTEM) {
                         Text(
                             text = "当前系统代理：${describeSystemProxy(previewInfo)}",
@@ -1400,7 +1404,7 @@ fun SettingsScreen(
                     }
                     Text(
                         text = "代理用于加速 GitHub 等海外资源；不使用代理时所有请求直连。" +
-                            "系统代理取自 Windows 系统设置，仅在启动或切换设置时读取一次。" +
+                            "系统代理取自当前系统设置，仅在启动或切换设置时读取一次。" +
                             "（暂不支持 PAC 脚本与绕过列表）",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant

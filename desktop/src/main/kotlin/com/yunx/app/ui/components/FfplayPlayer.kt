@@ -231,7 +231,10 @@ private fun FfplayControls(
             .padding(horizontal = 12.dp, vertical = 6.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { controller.togglePlayPause() }) {
+            IconButton(
+                onClick = { controller.togglePlayPause() },
+                enabled = FfplayManager.isWindows()
+            ) {
                 Icon(
                     imageVector = if (controller.playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                     contentDescription = if (controller.playing) "暂停" else "播放",
@@ -262,7 +265,10 @@ private fun FfplayControls(
                 style = MaterialTheme.typography.labelMedium
             )
             Spacer(Modifier.width(4.dp))
-            IconButton(onClick = { controller.toggleMute() }) {
+            IconButton(
+                onClick = { controller.toggleMute() },
+                enabled = FfplayManager.isWindows()
+            ) {
                 Icon(
                     imageVector = if (controller.muted) Icons.Rounded.VolumeOff else Icons.Rounded.VolumeUp,
                     contentDescription = if (controller.muted) "取消静音" else "静音",
@@ -288,6 +294,13 @@ private fun FfplayControls(
                 maxLines = 1,
                 modifier = Modifier.padding(bottom = 2.dp)
             )
+            if (!FfplayManager.isWindows()) {
+                Text(
+                    text = "macOS 使用独立 FFplay 窗口播放；暂停按 P，静音按 M，关闭窗口即可结束预览。",
+                    color = Color(0xFF9E9E9E),
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
         }
     }
 }
@@ -314,14 +327,25 @@ private fun FfplayUnavailablePanel(onInstalled: () -> Unit) {
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "在线预览（边下边播）需要 ffplay。可一键下载 FFmpeg 精简版到本应用私有目录，" +
-                "不会改动系统环境变量。",
+            text = if (FfplayManager.supportsManagedDownload()) {
+                "在线预览（边下边播）需要 ffplay。可一键下载 FFmpeg 精简版到本应用私有目录，" +
+                    "不会改动系统环境变量。"
+            } else {
+                "在线预览（边下边播）需要 ffplay。macOS 请先通过 Homebrew 安装：" +
+                    "在终端执行 brew install ffmpeg，安装后点下方「重新检测」。"
+            },
             color = Color(0xFF9E9E9E),
             style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(16.dp))
-        if (downloading) {
+        if (!FfplayManager.supportsManagedDownload()) {
+            Button(onClick = {
+                com.yunx.app.util.DesktopActions.openUrl("https://brew.sh/")
+            }) { Text("打开 Homebrew 官网") }
+            Spacer(Modifier.height(8.dp))
+            TextButton(onClick = onInstalled) { Text("重新检测") }
+        } else if (downloading) {
             if (total > 0) {
                 LinearProgressIndicator(
                     progress = { (read.toFloat() / total.toFloat()).coerceIn(0f, 1f) },
@@ -376,7 +400,8 @@ private fun FfplayUnavailablePanel(onInstalled: () -> Unit) {
         }
         Spacer(Modifier.height(16.dp))
         Text(
-            text = "也可以自行安装 FFmpeg（或把 ffplay.exe 所在目录加入 PATH）后重新打开预览。",
+            text = "也可以自行安装 FFmpeg（把 ${if (FfplayManager.isWindows()) "ffplay.exe" else "ffplay"} " +
+                "所在目录加入 PATH）后重新打开预览。",
             color = Color(0xFF6E6E6E),
             style = MaterialTheme.typography.bodySmall,
             textAlign = TextAlign.Center

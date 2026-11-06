@@ -3,7 +3,14 @@ package com.yunx.app.util
 import com.sun.jna.platform.win32.Crypt32Util
 import com.yunx.app.AppContext
 import java.io.File
+import java.security.MessageDigest
 import java.sql.DriverManager
+import java.util.concurrent.ConcurrentHashMap
+import javax.crypto.Cipher
+import javax.crypto.SecretKeyFactory
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.PBEKeySpec
+import javax.crypto.spec.SecretKeySpec
 
 /**
  * 一键从本机浏览器导入网盘登录 Cookie（方案 A）。
@@ -24,7 +31,8 @@ object BrowserCookieImporter {
         val id: String,
         val displayName: String,
         val kind: Kind,
-        val profileDirs: List<File>
+        val profileDirs: List<File>,
+        val macKeychainService: String? = null
     )
 
     data class FoundCookies(
@@ -45,6 +53,7 @@ object BrowserCookieImporter {
 
     /** 发现本机已安装浏览器的 Cookie 库目录（存在 cookies 文件才算） */
     fun discoverBrowsers(): List<BrowserInfo> {
+        if (isMac()) return discoverMacBrowsers()
         val local = System.getenv("LOCALAPPDATA")?.let { File(it) } ?: return emptyList()
         val roaming = System.getenv("APPDATA")?.let { File(it) } ?: return emptyList()
         val out = mutableListOf<BrowserInfo>()
@@ -89,6 +98,45 @@ object BrowserCookieImporter {
         return out
     }
 
+    private fun discoverMacBrowsers(): List<BrowserInfo> {
+        val home = File(System.getProperty("user.home"))
+        val support = File(home, "Library/Application Support")
+        val out = mutableListOf<BrowserInfo>()
+        val chromium = listOf(
+            Triple("Chrome", "Google/Chrome", "Chrome Safe Storage"),
+            Triple("Edge", "Microsoft Edge", "Microsoft Edge Safe Storage"),
+            Triple("Brave", "BraveSoftware/Brave-Browser", "Brave Safe Storage"),
+            Triple("Vivaldi", "Vivaldi", "Vivaldi Safe Storage"),
+            Triple("Opera", "com.operasoftware.Opera", "Opera Safe Storage"),
+            Triple("Chromium", "Chromium", "Chromium Safe Storage")
+        )
+        for ((name, relative, service) in chromium) {
+            val root = File(support, relative)
+            if (!root.isDirectory) continue
+            val profiles = buildList {
+                if (cookiesFile(root) != null) add(root)
+                root.listFiles()?.filter { it.isDirectory }?.forEach { child ->
+                    if (cookiesFile(child) != null) add(child)
+                }
+            }.distinct()
+            if (profiles.isNotEmpty()) {
+                out += BrowserInfo("chromium-$name", name, Kind.CHROMIUM, profiles, service)
+            }
+        }
+        val ffRoot = File(support, "Firefox/Profiles")
+        if (ffRoot.isDirectory) {
+            val profiles = ffRoot.listFiles { f -> f.isDirectory && File(f, "cookies.sqlite").isFile }
+                ?.toList().orEmpty()
+            if (profiles.isNotEmpty()) out += BrowserInfo("firefox", "Firefox", Kind.FIREFOX, profiles)
+        }
+        return out
+    }
+
+    private fun cookiesFile(profile: File): File? = listOf(
+        File(profile, "Network/Cookies"),
+        File(profile, "Cookies")
+    ).firstOrNull { it.isFile }
+
     /** 从指定浏览器导入指定平台的 Cookie；未找到返回 null */
     fun importFrom(browser: BrowserInfo, domains: List<String>): FoundCookies? =
         when (browser.kind) {
@@ -100,12 +148,11 @@ object BrowserCookieImporter {
 
     private fun importChromium(browser: BrowserInfo, domains: List<String>): FoundCookies? {
         for (root in browser.profileDirs) {
-            val cookiesFile = File(root, "Network\\Cookies")
-            if (!cookiesFile.exists()) continue
+            val cookiesDb = cookiesFile(root) ?: continue
             val copy = File(AppContext.cacheDir, "browser-cookies-${System.nanoTime()}.db")
             try {
-                cookiesFile.copyTo(copy, overwrite = true)
-                val cookie = extractChromium(copy, domains) ?: continue
+                cookiesDb.copyTo(copy, overwrite = true)
+                val cookie = extractChromium(copy, domains, browser) ?: continue
                 return FoundCookies(browser.displayName, cookie, cookie.split(';').size)
             } catch (e: Exception) {
                 Log.w(TAG, "读取 ${browser.displayName} Cookie 失败: ${e.message}")
@@ -116,7 +163,7 @@ object BrowserCookieImporter {
         return null
     }
 
-    private fun extractChromium(dbFile: File, domains: List<String>): String? {
+    private fun extractChromium(dbFile: File, domains: List<String>, browser: BrowserInfo): String? {
         Class.forName("org.sqlite.JDBC")
         DriverManager.getConnection("jdbc:sqlite:${dbFile.absolutePath}").use { conn ->
             val likeClause = domains.joinToString(" OR ") { "host_key LIKE ?" }
@@ -128,7 +175,9 @@ object BrowserCookieImporter {
                     val pairs = mutableListOf<String>()
                     while (rs.next()) {
                         val name = rs.getString(2)
-                        val value = decryptChromiumValue(rs.getBytes(3)) ?: continue
+                        val value = decryptChromiumValue(
+                            rs.getBytes(3), rs.getString(1), browser
+                        ) ?: continue
                         if (name.isNotBlank()) pairs += "$name=$value"
                     }
                     if (pairs.isEmpty()) return null
@@ -144,7 +193,11 @@ object BrowserCookieImporter {
      * - "v20" 前缀（应用绑定加密，Chrome 127+）→ 返回 null（无法解密，跳过后整体提示）；
      * - 无前缀（个别旧版）→ 直接按 DPAPI 尝试。
      */
-    private fun decryptChromiumValue(bytes: ByteArray): String? {
+    private fun decryptChromiumValue(
+        bytes: ByteArray,
+        hostKey: String?,
+        browser: BrowserInfo
+    ): String? {
         if (bytes.size < 3) return null
         var offset = 0
         if (bytes[0] == 'v'.code.toByte() &&
@@ -157,10 +210,46 @@ object BrowserCookieImporter {
             offset = 3
         }
         val payload = if (offset > 0) bytes.copyOfRange(offset, bytes.size) else bytes
-        return runCatching {
-            val plain = Crypt32Util.cryptUnprotectData(payload)
-            String(plain, Charsets.UTF_8)
-        }.getOrNull()
+        val plain = if (isMac()) {
+            decryptMacChromium(payload, browser.macKeychainService) ?: return null
+        } else {
+            runCatching { Crypt32Util.cryptUnprotectData(payload) }.getOrNull() ?: return null
+        }
+        // Chromium 24+ 在明文前附 32 字节 SHA-256(host_key)；命中时剥掉，避免 Cookie 值带乱码。
+        val value = if (plain.size > 32 && hostKey != null) {
+            val digest = MessageDigest.getInstance("SHA-256").digest(hostKey.toByteArray(Charsets.UTF_8))
+            if (plain.copyOfRange(0, 32).contentEquals(digest)) plain.copyOfRange(32, plain.size) else plain
+        } else {
+            plain
+        }
+        return String(value, Charsets.UTF_8)
+    }
+
+    private val macKeyCache = ConcurrentHashMap<String, SecretKeySpec>()
+
+    private fun decryptMacChromium(payload: ByteArray, service: String?): ByteArray? = runCatching {
+        val actualService = service ?: return@runCatching null
+        val key = macKeyCache[actualService]
+            ?: loadMacSafeStorageKey(actualService).also { macKeyCache[actualService] = it }
+        val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+        cipher.init(Cipher.DECRYPT_MODE, key, IvParameterSpec(ByteArray(16) { 0x20 }))
+        cipher.doFinal(payload)
+    }.getOrNull()
+
+    private fun loadMacSafeStorageKey(service: String): SecretKeySpec {
+        val process = ProcessBuilder(
+            "security", "find-generic-password", "-w", "-s", service
+        ).redirectErrorStream(true).start()
+        val password = process.inputStream.bufferedReader().use { it.readText() }.trim()
+        val finished = process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+        check(finished && process.exitValue() == 0 && password.isNotBlank()) {
+            "无法读取 $service"
+        }
+        val spec = PBEKeySpec(password.toCharArray(), "saltysalt".toByteArray(), 1003, 128)
+        return SecretKeySpec(
+            SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1").generateSecret(spec).encoded,
+            "AES"
+        )
     }
 
     // ---------- Firefox ----------
@@ -204,4 +293,8 @@ object BrowserCookieImporter {
             }
         }
     }
+
+    private fun isMac(): Boolean =
+        System.getProperty("os.name").orEmpty().lowercase()
+            .let { it.contains("mac") || it.contains("darwin") }
 }

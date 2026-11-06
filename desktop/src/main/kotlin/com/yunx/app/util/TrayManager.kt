@@ -1,6 +1,7 @@
 package com.yunx.app.util
 
 import java.awt.Image
+import java.awt.MenuItem
 import java.awt.PopupMenu
 import java.awt.SystemTray
 import java.awt.TrayIcon
@@ -12,8 +13,8 @@ import javax.imageio.ImageIO
 /**
  * 系统托盘管理器。
  *
- * 右键菜单用 JNA 调 Win32 TrackPopupMenu（CreatePopupMenu + AppendMenuW），
- * 中文正常、暗色跟随系统。不用 Swing、不自绘窗口。
+ * Windows 右键菜单用 JNA 调 Win32 TrackPopupMenu（中文正常、暗色跟随系统）；
+ * macOS 使用 AWT PopupMenu（菜单栏托盘由系统绘制）。
  */
 object TrayManager {
 
@@ -28,19 +29,35 @@ object TrayManager {
      * @param image 图标
      * @param onLeftClick 左键单击回调
      * @param onRightClick 右键单击回调（屏幕坐标 x, y）
+     * @param onShowMac 仅 macOS：托盘菜单「显示主窗口」
+     * @param onExitMac 仅 macOS：托盘菜单「退出」
      */
     fun install(
         image: BufferedImage,
         onLeftClick: () -> Unit,
-        onRightClick: (Int, Int) -> Unit
+        onRightClick: (Int, Int) -> Unit,
+        onShowMac: (() -> Unit)? = null,
+        onExitMac: (() -> Unit)? = null
     ) {
         if (!SystemTray.isSupported()) return
         if (trayIcon != null) uninstall()
 
+        val isMac = System.getProperty("os.name").orEmpty().lowercase()
+            .let { it.contains("mac") || it.contains("darwin") }
+        val popup = PopupMenu()
+        if (isMac) {
+            popup.add(MenuItem("显示主窗口").apply {
+                addActionListener { onShowMac?.invoke() ?: onLeftClick() }
+            })
+            popup.addSeparator()
+            popup.add(MenuItem("退出").apply {
+                addActionListener { onExitMac?.invoke() }
+            })
+        }
         val icon = TrayIcon(image.getScaledInstance(16, 16, Image.SCALE_SMOOTH), "云析 YunX-Desktop").apply {
             isImageAutoSize = true
-            // 空 PopupMenu：Windows 必须设才能收到右键事件
-            popupMenu = PopupMenu()
+            // Windows 必须设 PopupMenu 才能收到右键事件；macOS 直接使用系统托盘菜单
+            popupMenu = popup
             addMouseListener(object : MouseAdapter() {
                 override fun mouseClicked(e: MouseEvent) {
                     if (e.button == MouseEvent.BUTTON1) onLeftClick()

@@ -20,11 +20,11 @@ import java.util.concurrent.TimeUnit
 import java.util.zip.ZipInputStream
 
 /**
- * 内置 Gopeed 下载引擎（**外部 exe 子进程** 版）。
+ * 内置 Gopeed 下载引擎（**外部可执行文件子进程** 版）。
  *
  * 与上游 Android 版的根本差异：上游把 gomobile 编译出的 `libgojni.so` 用 `System.load` 装进本进程、
- * 配 `apiEnable=false` 走进程内 `rest.Dispatch`；桌面没有 Windows 版内核库，改为把官方
- * `gopeed-web-<ver>-windows-amd64.zip` 里的 `gopeed.exe` 作为**子进程**拉起，走它的本地 HTTP API。
+ * 配 `apiEnable=false` 走进程内 `rest.Dispatch`；桌面改为把官方 web 包里的 `gopeed`
+ * （Windows 为 `gopeed.exe`）作为**子进程**拉起，走它的本地 HTTP API。
  * 因此 REST 契约（路径 / 请求体 / 响应信封 `{code,msg,data}` / 状态枚举）与上游完全一致。
  *
  * 进程约定：
@@ -63,12 +63,14 @@ object GopeedEngine {
 
     private const val TAG = "GopeedEngine"
     private const val DIR_NAME = "gopeed"
-    private const val EXE_NAME = "gopeed.exe"
     private const val BIN_DIR_NAME = "bin"
+    private val isMac = System.getProperty("os.name").orEmpty().lowercase()
+        .let { it.contains("mac") || it.contains("darwin") }
+    private val exeName: String = if (isMac) "gopeed" else "gopeed.exe"
 
     /** 引擎 HTTP 协议的默认 UA（与 gopeed 自带默认一致）：任务未自带 UA 时使用，避免空 UA 被 CDN 限速 */
     private const val DEFAULT_HTTP_UA =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
 
     /** 启动后等待 HTTP API 就绪的上限（毫秒）；冷启动解压/建库一般 1-3 秒 */
@@ -118,7 +120,7 @@ object GopeedEngine {
     private val settings: SettingsRepository by lazy { SettingsRepository() }
 
     /** 内核可执行文件 */
-    fun exeFile(): File = File(File(engineDir(), BIN_DIR_NAME), EXE_NAME)
+    fun exeFile(): File = File(File(engineDir(), BIN_DIR_NAME), exeName)
 
     /** 引擎存储目录（bolt 数据库） */
     private fun storageDir(): File = File(engineDir(), "storage")
@@ -145,8 +147,8 @@ object GopeedEngine {
 
     /**
      * 从内核压缩包 / 可执行文件导入内核，支持：
-     * - `.zip`（官方 `gopeed-web-<ver>-windows-amd64.zip`）：在包内按名找 `gopeed.exe`（任意层级）；
-     * - `.exe`：直接作为内核拷入。
+     * - `.zip`（官方 web 包）：在包内按名找 `gopeed` / `gopeed.exe`（任意层级）；
+     * - 裸可执行文件：直接作为内核拷入。
      * 导入前会先停掉正在运行的引擎（否则 exe 被占用、写入失败）。
      * @return 安装后的内核文件
      */
@@ -164,7 +166,7 @@ object GopeedEngine {
                 var entry = zip.nextEntry
                 while (entry != null) {
                     val entryName = entry.name.replace('\\', '/')
-                    if (!entry.isDirectory && entryName.substringAfterLast('/').equals(EXE_NAME, ignoreCase = true)) {
+                    if (!entry.isDirectory && entryName.substringAfterLast('/').equals(exeName, ignoreCase = true)) {
                         target.outputStream().buffered().use { out -> zip.copyTo(out) }
                         found = true
                         break
@@ -173,10 +175,17 @@ object GopeedEngine {
                 }
             }
             if (!found) {
-                throw IllegalStateException("压缩包里没有找到 $EXE_NAME（请使用 Gopeed 官方 windows-amd64 包）")
+                throw IllegalStateException(
+                    "压缩包里没有找到 $exeName（请使用 Gopeed 官方 ${if (isMac) "macos" else "windows"} 包）"
+                )
             }
         } else {
             archive.copyTo(target, overwrite = true)
+        }
+        if (isMac) {
+            check(target.setExecutable(true, false)) {
+                "无法为内核设置可执行权限：${target.absolutePath}"
+            }
         }
         lastError = null
         _state.value = State.INSTALLED

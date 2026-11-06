@@ -101,6 +101,7 @@ import com.yunx.app.ui.SnackbarController
 import com.yunx.app.util.CookieCleaner
 import com.yunx.app.util.DesktopActions
 import com.yunx.app.util.TrayManager
+import com.yunx.app.util.WindowsTitleBar
 import com.yunx.app.data.repository.AccountDirectory
 import com.yunx.app.data.repository.BaiduAccountRepository
 import com.yunx.app.data.repository.BaiduResolveRepository
@@ -834,7 +835,13 @@ fun MainScreen(
 
     // 折叠标题状态提升到本层：跨页面共享
     val topAppBarState = rememberTopAppBarState()
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(topAppBarState)
+    // macOS 触控板滚动更容易让大标题停在「折叠中」的半透明姿态，左上角会变成浅灰色。
+    // 桌面窗口高度固定，这里在 macOS 固定展开大标题；Windows 保持原来的滚动折叠行为。
+    val scrollBehavior = if (WindowsTitleBar.isMac) {
+        TopAppBarDefaults.pinnedScrollBehavior(topAppBarState)
+    } else {
+        TopAppBarDefaults.exitUntilCollapsedScrollBehavior(topAppBarState)
+    }
 
 
     /**
@@ -894,7 +901,8 @@ fun MainScreen(
                     Text(
                         text = currentTab.title,
                         style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.SemiBold
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 },
                 actions = {
@@ -966,7 +974,9 @@ fun MainScreen(
                 scrollBehavior = scrollBehavior,
                 colors = TopAppBarDefaults.largeTopAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
-                    scrolledContainerColor = MaterialTheme.colorScheme.surface
+                    scrolledContainerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface,
+                    actionIconContentColor = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             )
         }

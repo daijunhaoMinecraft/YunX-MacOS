@@ -6,6 +6,29 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val hostOs = System.getProperty("os.name").orEmpty().lowercase()
+val hostArch = System.getProperty("os.arch").orEmpty().lowercase()
+val isWindowsHost = hostOs.contains("win")
+val isMacHost = hostOs.contains("mac") || hostOs.contains("darwin")
+val isArm64Host = hostArch.contains("aarch64") || hostArch.contains("arm64")
+val javafxClassifier = when {
+    isMacHost && isArm64Host -> "mac-aarch64"
+    isMacHost -> "mac"
+    isWindowsHost && isArm64Host -> "win"
+    else -> "win"
+}
+val jcefNativesModule = when {
+    isMacHost && isArm64Host -> "jcef-natives-macosx-arm64"
+    isMacHost -> "jcef-natives-macosx-amd64"
+    else -> "jcef-natives-windows-amd64"
+}
+val jcefNativeVersion = "jcef-1770317+cef-132.3.1+g144febe+chromium-132.0.6834.83"
+val jcefMacJvmArgs = listOf(
+    "--add-exports=java.desktop/sun.awt=ALL-UNNAMED",
+    "--add-exports=java.desktop/sun.lwawt=ALL-UNNAMED",
+    "--add-exports=java.desktop/sun.lwawt.macosx=ALL-UNNAMED"
+)
+
 dependencies {
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
@@ -25,22 +48,19 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.9.0")
 
-    // Room -> 纯 JDBC SQLite
-    // ★ 用裁剪后的本地 jar：官方包 13.6 MB，含六个平台的原生库，本项目只跑 Windows。
-    //   只保留 org/sqlite/native/Windows（x86/x86_64/arm/arm64），其余代码与 META-INF 原样保留。
-    implementation(files("libs/sqlite-jdbc-3.47.1.0-win.jar"))
+    // Room -> 纯 JDBC SQLite。使用官方跨平台包，macOS / Windows 各自装载对应原生库。
+    implementation("org.xerial:sqlite-jdbc:3.47.1.0")
     // Android 内置 org.json 的 JVM 等价物
     implementation("org.json:json:20240303")
     // 主题种子色（material-color-utilities 无公开仓库坐标；从 material 1.14.0 AAR 解包 classes.jar 本地引入）
     implementation(files("libs/material-color-utilities-1.0.0.jar"))
 
     // JavaFX MediaView 播放器（M6）：JFXPanel 经 SwingPanel 嵌入 Compose。
-    // 版本跟随 jvmToolchain(17)；发布目标只有 Windows，直接用 :win classifier（jar 内含原生库，
-    // 首次运行由 JavaFX 自动解到用户目录缓存，jpackage 无需额外处理）
-    implementation("org.openjfx:javafx-base:17.0.13:win")
-    implementation("org.openjfx:javafx-graphics:17.0.13:win")
-    implementation("org.openjfx:javafx-media:17.0.13:win")
-    implementation("org.openjfx:javafx-swing:17.0.13:win")
+    // 原生 classifier 跟随构建宿主的 OS / CPU（mac、mac-aarch64、win）。
+    implementation("org.openjfx:javafx-base:17.0.13:$javafxClassifier")
+    implementation("org.openjfx:javafx-graphics:17.0.13:$javafxClassifier")
+    implementation("org.openjfx:javafx-media:17.0.13:$javafxClassifier")
+    implementation("org.openjfx:javafx-swing:17.0.13:$javafxClassifier")
 
     // GFM Markdown 渲染（README / 更新说明）。注意：必须停留在 0.33.x ——
     // 0.34.0 起改用 Compose 1.8+ 的 BasicText 签名（含 TextAutoSize），与项目锁定的
@@ -67,11 +87,9 @@ dependencies {
         exclude(group = "me.friwi", module = "jogl-all")
         exclude(group = "me.friwi", module = "gluegen-rt")
     }
-    // ★ 原生库只在开发运行（gradle run）时由 jcefmaven 从 classpath 里取；
-    //   发布包不随带这个 120MB 的 jar，改由打包脚本用 JcefNativesPacker 重打成
-    //   app\jcef-natives.tar.gz（裁剪语言包），首次使用时由 JcefNativesInstaller 解开。
-    //   见 portable-package.ps1 [2c/5] 与 ui/jcef/JcefNativesInstaller.kt。
-    implementation("me.friwi:jcef-natives-windows-amd64:jcef-1770317+cef-132.3.1+g144febe+chromium-132.0.6834.83")
+    // 原生包随宿主平台选择。Windows 发布脚本仍可把它重打成 jcef-natives.tar.gz；
+    // macOS 直接使用 jpackage 打进 .app 的 classpath。
+    implementation("me.friwi:$jcefNativesModule:$jcefNativeVersion")
 
     // tar.gz 读写：CEF 原生库发布包（打包期重打成 gzip，运行期自解包）
     // jcefmaven 已传递引入 commons-compress，这里显式声明版本以保证稳定
@@ -127,13 +145,15 @@ val generateAppVersion by tasks.registering {
 }
 kotlin.sourceSets["main"].kotlin.srcDir(generateAppVersion)
 
-// ---- 遮罩选位器 EXE 打进 jar 资源 ----
+// ---- 遮罩选位器 EXE 打进 jar 资源（仅 Windows）----
 // picker\PositionPicker.cs 由 run.ps1 / portable-package.ps1 用 csc 编到仓库根 build\ 下，
 // 这里把它作为资源塞进 jar 的 yunx\ 前缀；运行期由 util/PositionPicker.kt 释放到 %TEMP% 再执行，
 // 因此发布包目录里不再出现这个原生 exe。（文件不存在时 from() 会静默跳过）
-tasks.named<ProcessResources>("processResources") {
-    val pickerExe = rootProject.layout.projectDirectory.file("build/YunX-PositionPicker.exe")
-    from(pickerExe) { into("yunx") }
+if (isWindowsHost) {
+    tasks.named<ProcessResources>("processResources") {
+        val pickerExe = rootProject.layout.projectDirectory.file("build/YunX-PositionPicker.exe")
+        from(pickerExe) { into("yunx") }
+    }
 }
 
 tasks.withType<Test> {
@@ -227,16 +247,16 @@ val compileDarkMode by tasks.registering(Exec::class) {
 
 // 开发运行（:desktop:run）时把 DLL 目录并入 java.library.path，并保留 JDK bin（jawt 等原生库）
 tasks.withType<JavaExec> {
-    dependsOn(compileDarkMode)
+    if (isWindowsHost) dependsOn(compileDarkMode)
     val jvmBin = File(System.getProperty("java.home"), "bin").absolutePath
-    systemProperty("java.library.path", "${nativeOutDir.absolutePath};$jvmBin")
+    systemProperty("java.library.path", "${nativeOutDir.absolutePath}${File.pathSeparator}$jvmBin")
 }
 
 // 收集运行时依赖 jar 路径（供便携版 app-image 打包）
 tasks.register("printRuntimeClasspath") {
     doLast {
         val cp = configurations.runtimeClasspath.get().files
-            .joinToString(";") { it.absolutePath }
+            .joinToString(File.pathSeparator) { it.absolutePath }
         println("RUNTIME_CP=$cp")
     }
 }
@@ -258,16 +278,34 @@ tasks.register<Sync>("exportJcefNatives") {
 compose.desktop {
     application {
         mainClass = "com.yunx.app.MainKt"
+        if (isMacHost) {
+            // JCEF 的 macOS 窗口接入层直接使用 AWT 内部类；JDK 17 默认不导出这些包，
+            // 否则打开登录页时 CefBrowserWindowMac 会抛 IllegalAccessError。
+            jvmArgs += jcefMacJvmArgs
+        }
         nativeDistributions {
-            targetFormats(TargetFormat.Exe)
+            if (isMacHost) {
+                targetFormats(TargetFormat.Dmg)
+            } else if (isWindowsHost) {
+                targetFormats(TargetFormat.Exe)
+            }
             // sqlite-jdbc 通过反射加载 java.sql.Driver，jlink 自动检测不到，必须显式声明；
             // jdk.httpserver 是视频预览的本地回环代理（com.sun.net.httpserver），
             // jdk.unsupported.desktop 是 JavaFX 与 Swing 互操作（JFXPanel 里的 jdk.swing.interop）——
             // 两者 jdeps 都探测不到，漏了它们安装包里的预览会一律失败（无法预览 / 播放器初始化失败）
             modules("java.sql", "java.naming", "jdk.httpserver", "jdk.unsupported.desktop")
-            // 每用户安装（%LOCALAPPDATA%\Programs），无需管理员权限
-            windows {
-                perUserInstall = true
+            if (isWindowsHost) {
+                // 每用户安装（%LOCALAPPDATA%\Programs），无需管理员权限
+                windows {
+                    perUserInstall = true
+                }
+            }
+            if (isMacHost) {
+                macOS {
+                    bundleID = "com.yunx.desktop"
+                    dockName = "云析"
+                    iconFile.set(project.file("src/main/resources/icon.icns"))
+                }
             }
             packageName = "YunX-Desktop"
             packageVersion = appVersion

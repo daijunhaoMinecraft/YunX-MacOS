@@ -76,7 +76,7 @@ class SettingsRepository {
             prefs.putInt("download_retry_count", value.coerceIn(0, 10))
         }
 
-    /** 下载时阻止电脑休眠（Windows：任务运行中 SetThreadExecutionState 阻止系统睡眠） */
+    /** 下载时阻止电脑休眠（Windows SetThreadExecutionState / macOS caffeinate） */
     var keepAwakeWhileDownloading: Boolean
         get() = prefs.getBoolean("keep_awake_downloading", prefs.getBoolean("keep_download_when_locked", true))
         set(value) {
@@ -95,7 +95,7 @@ class SettingsRepository {
             prefs.putBoolean("shutdown_when_downloads_complete", value)
         }
 
-    /** 通知中心进度样式（Windows 通知中心 toast：true 时进度条附带下载速度） */
+    /** 通知进度样式（Windows通知中心进度条是否附带速度；macOS 仅完成通知） */
     var notificationShowSpeed: Boolean
         get() = prefs.getBoolean("notification_show_speed", true)
         set(value) {
@@ -598,7 +598,7 @@ class SettingsRepository {
 
         /** 代理模式：不使用代理（直连） */
         const val PROXY_MODE_DIRECT = "direct"
-        /** 代理模式：使用系统代理（读 Windows 系统代理设置） */
+        /** 代理模式：使用系统代理（Windows 注册表 / macOS scutil） */
         const val PROXY_MODE_SYSTEM = "system"
         /** 代理模式：手动配置代理（主机 + 端口） */
         const val PROXY_MODE_MANUAL = "manual"

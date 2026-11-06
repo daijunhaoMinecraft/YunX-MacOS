@@ -38,8 +38,8 @@ import com.yunx.app.ui.theme.compactMarkdownTypography
 /**
  * 发现新版本弹窗：标题 + 当前/最新版本 + 更新说明（Markdown 渲染、可滚动限高）+ 下载更新 / 稍后 / 不再提示该版本。
  *
- * 桌面版同时提供「安装版(.exe)」和「便携版(.zip)」两个下载入口，
- * 由用户按需选择；若某个类型在 Release 中不存在，则不显示对应按钮。
+ * macOS 版优先提供 DMG 安装包；若 Release 暂未附 DMG，则回退到 ZIP。
+ * 若某个类型在 Release 中不存在，则不显示对应按钮。
  *
  * 弹窗走窗口内覆盖层（[FadeAlertDialog]），不创建原生窗口。
  */
@@ -59,7 +59,7 @@ fun UpdateDialog(
      */
     mandatory: Boolean = false
 ) {
-    val exeAsset = release.assets.firstOrNull { it.name.endsWith(".exe", true) }
+    val dmgAsset = release.assets.firstOrNull { it.name.endsWith(".dmg", true) }
     val zipAsset = release.assets.firstOrNull { it.name.endsWith(".zip", true) }
     // 说明里的图片复用 README 的自研加载器（无 Coil，走 GitHubMirror 统一镜像加速）
     GitHubMarkdownImageTransformer.mirrorPrefix = GitHubMirror.activePrefix()
@@ -168,10 +168,10 @@ fun UpdateDialog(
                     )
                 }
                 Spacer(modifier = Modifier.height(16.dp))
-                // 下载入口（安装版 / 便携版，各自可选镜像站）
-                if (exeAsset != null) {
+                // 下载入口（DMG / ZIP，各自可选镜像站）
+                if (dmgAsset != null) {
                     Button(
-                        onClick = { onDownloadAsset(exeAsset.downloadUrl, exeAsset.name) },
+                        onClick = { onDownloadAsset(dmgAsset.downloadUrl, dmgAsset.name) },
                         enabled = !downloading
                     ) {
                         if (downloading) {
@@ -188,12 +188,12 @@ fun UpdateDialog(
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("下载安装版 (.exe)")
+                            Text("下载 macOS 安装包 (.dmg)")
                         }
                     }
                     if (onDownloadMirrorAsset != null) {
-                        TextButton(onClick = { onDownloadMirrorAsset(exeAsset.downloadUrl, exeAsset.name) }) {
-                            Text("镜像站下载安装版", color = MaterialTheme.colorScheme.primary)
+                        TextButton(onClick = { onDownloadMirrorAsset(dmgAsset.downloadUrl, dmgAsset.name) }) {
+                            Text("镜像站下载 DMG", color = MaterialTheme.colorScheme.primary)
                         }
                     }
                 }
@@ -217,16 +217,16 @@ fun UpdateDialog(
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("下载便携版 (.zip)")
+                            Text("下载 ZIP 包")
                         }
                     }
                     if (onDownloadMirrorAsset != null) {
                         TextButton(onClick = { onDownloadMirrorAsset(zipAsset.downloadUrl, zipAsset.name) }) {
-                            Text("镜像站下载便携版", color = MaterialTheme.colorScheme.primary)
+                            Text("镜像站下载 ZIP", color = MaterialTheme.colorScheme.primary)
                         }
                     }
                 }
-                if (exeAsset == null && zipAsset == null) {
+                if (dmgAsset == null && zipAsset == null) {
                     Text(
                         text = "该版本未提供安装包",
                         style = MaterialTheme.typography.bodySmall,
