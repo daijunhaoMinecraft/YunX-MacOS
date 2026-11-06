@@ -1,9 +1,15 @@
 pluginManagement {
+    val useChinaMirrors = providers.gradleProperty("useChinaMirrors")
+        .orNull
+        ?.toBooleanStrictOrNull()
+        ?: true
     repositories {
-        // 国内镜像优先（本机无法直连 dl.google.com）
-        maven("https://maven.aliyun.com/repository/gradle-plugin")
-        maven("https://maven.aliyun.com/repository/google")
-        maven("https://maven.aliyun.com/repository/central")
+        // 国内开发默认优先镜像；CI 传 -PuseChinaMirrors=false，避免镜像故障阻断发布。
+        if (useChinaMirrors) {
+            maven("https://maven.aliyun.com/repository/gradle-plugin")
+            maven("https://maven.aliyun.com/repository/google")
+            maven("https://maven.aliyun.com/repository/central")
+        }
         gradlePluginPortal()
         mavenCentral()
         google()
@@ -11,9 +17,15 @@ pluginManagement {
 }
 
 dependencyResolutionManagement {
+    val useChinaMirrors = providers.gradleProperty("useChinaMirrors")
+        .orNull
+        ?.toBooleanStrictOrNull()
+        ?: true
     repositories {
-        maven("https://maven.aliyun.com/repository/google")
-        maven("https://maven.aliyun.com/repository/central")
+        if (useChinaMirrors) {
+            maven("https://maven.aliyun.com/repository/google")
+            maven("https://maven.aliyun.com/repository/central")
+        }
         mavenCentral()
         google()
     }
