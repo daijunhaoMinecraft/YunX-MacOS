@@ -13,7 +13,9 @@ import java.awt.datatransfer.StringSelection
 import java.io.File
 import java.net.URI
 import javax.swing.JFileChooser
+import javax.swing.SwingUtilities
 import javax.swing.UIManager
+import javax.swing.filechooser.FileNameExtensionFilter
 import javax.swing.filechooser.FileSystemView
 
 /**
@@ -212,7 +214,8 @@ object DesktopActions {
      *   即资源管理器同款「选择文件夹」对话框（WindowsFolderPicker），
      *   COM 不可用时回退 Swing JFileChooser。
      * Linux：使用 Swing JFileChooser（DIRECTORIES_ONLY 模式）。
-     * macOS：继续使用 AWT FileDialog（原生体验更好）。
+     * macOS：使用 Swing JFileChooser。AWT FileDialog 会在 AppKit 主线程进入
+     *   NSSavePanel.runModal，当前 Compose/JCEF 组合下对话框窗口可能不显示，应用随即无响应。
      *
      * @return 选中目录绝对路径；取消返回 null
      */
@@ -220,20 +223,7 @@ object DesktopActions {
         val osName = System.getProperty("os.name", "").lowercase()
         val isMac = osName.contains("mac") || osName.contains("darwin")
 
-        if (isMac) {
-            System.setProperty("apple.awt.fileDialogForDirectories", "true")
-            val dialog = FileDialog(null as Frame?, "选择文件夹", FileDialog.LOAD)
-            dialog.isMultipleMode = false
-            dialog.isVisible = true
-            val dir = dialog.directory
-            val file = dialog.file
-            dialog.dispose()
-            return when {
-                dir == null -> null
-                file == null -> dir
-                else -> File(dir, file).absolutePath
-            }
-        }
+        if (isMac) return swingDirectoryChooser()
 
         if (WindowsTitleBar.isWindows) {
             return when (val r = WindowsFolderPicker.pick(defaultDownloadDir.takeIf { it.isDirectory }, "选择文件夹")) {
@@ -246,29 +236,29 @@ object DesktopActions {
         return swingDirectoryChooser()
     }
 
-    /** 旧式 Swing 目录选择器（回退用） */
-    private fun swingDirectoryChooser(): String? = runCatching {
-        try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()) } catch (_: Exception) {}
+    /** Swing 目录选择器（macOS 主路径 / Windows COM 不可用时回退） */
+    private fun swingDirectoryChooser(): String? = onSwingEdt {
+        runCatching { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()) }
         val chooser = JFileChooser(FileSystemView.getFileSystemView())
         chooser.fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
         chooser.dialogTitle = "选择文件夹"
         chooser.isAcceptAllFileFilterUsed = false
         chooser.approveButtonText = "选择文件夹"
         chooser.currentDirectory = defaultDownloadDir
-        val result = chooser.showOpenDialog(null)
-        if (result == JFileChooser.APPROVE_OPTION) {
+        if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) {
             chooser.selectedFile?.absolutePath
         } else {
             null
         }
-    }.getOrNull()
+    }
 
     /**
      * 弹出文件选择对话框（导入备份等）。
      *
      * Windows：使用原生 COM IFileOpenDialog（资源管理器同款样式，WindowsFilePicker），
      *   初始定位到下载目录，COM 不可用时回退 AWT FileDialog。
-     * macOS / Linux：AWT FileDialog。
+     * macOS：Swing JFileChooser（避开 AWT FileDialog 的 AppKit 原生模态循环）。
+     * Linux：AWT FileDialog。
      *
      * @param filters 文件类型过滤器（显示名 to 通配符），空则不过滤
      * @return 选中文件绝对路径；取消返回 null
@@ -277,7 +267,7 @@ object DesktopActions {
         val osName = System.getProperty("os.name", "").lowercase()
         val isMac = osName.contains("mac") || osName.contains("darwin")
 
-        if (isMac) return awtPickFile("选择文件")
+        if (isMac) return swingPickFile("选择文件", filters)
 
         if (WindowsTitleBar.isWindows) {
             return when (val r = WindowsFilePicker.pickFile(
@@ -297,7 +287,8 @@ object DesktopActions {
      *
      * Windows：使用原生 COM IFileSaveDialog（资源管理器同款样式，WindowsFilePicker），
      *   初始定位到系统下载目录，COM 不可用时回退 AWT FileDialog(SAVE)。
-     * macOS / Linux：AWT FileDialog(SAVE)。
+     * macOS：Swing JFileChooser（避开 AWT FileDialog 的 AppKit 原生模态循环）。
+     * Linux：AWT FileDialog(SAVE)。
      *
      * @param defaultName 预填文件名
      * @param filters 文件类型过滤器（显示名 to 通配符）
@@ -313,7 +304,7 @@ object DesktopActions {
         val osName = System.getProperty("os.name", "").lowercase()
         val isMac = osName.contains("mac") || osName.contains("darwin")
 
-        if (isMac) return awtSaveFile(defaultName, title)
+        if (isMac) return swingSaveFile(defaultName, title, filters, defaultExtension)
 
         if (WindowsTitleBar.isWindows) {
             return when (val r = WindowsFilePicker.saveFile(
@@ -336,6 +327,80 @@ object DesktopActions {
         val file = dialog.file
         dialog.dispose()
         return if (dir != null && file != null) File(dir, file).absolutePath else null
+    }
+
+    /** macOS 使用 Swing 文件选择器，规避 AWT 原生模态循环。 */
+    private fun swingPickFile(title: String, filters: List<Pair<String, String>>): String? = onSwingEdt {
+        val chooser = buildSwingChooser(title, JFileChooser.FILES_ONLY, filters)
+        if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) {
+            chooser.selectedFile?.absolutePath
+        } else {
+            null
+        }
+    }
+
+    private fun swingSaveFile(
+        defaultName: String,
+        title: String,
+        filters: List<Pair<String, String>>,
+        defaultExtension: String?
+    ): String? = onSwingEdt {
+        val chooser = buildSwingChooser(title, JFileChooser.FILES_ONLY, filters)
+        chooser.selectedFile = File(defaultDownloadDir, defaultName)
+        if (chooser.showSaveDialog(null) == JFileChooser.APPROVE_OPTION) {
+            chooser.selectedFile?.let { appendDefaultExtension(it, defaultExtension) }?.absolutePath
+        } else {
+            null
+        }
+    }
+
+    private fun buildSwingChooser(
+        title: String,
+        mode: Int,
+        filters: List<Pair<String, String>>
+    ): JFileChooser {
+        runCatching { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()) }
+        return JFileChooser(defaultDownloadDir).apply {
+            dialogTitle = title
+            fileSelectionMode = mode
+            isAcceptAllFileFilterUsed = true
+            filters.forEach { (label, wildcards) ->
+                val extensions = wildcards.split(';').mapNotNull { wildcard ->
+                    wildcard.trim().removePrefix("*.")
+                        .takeIf { wildcard.trim().startsWith("*.") && it.isNotBlank() && it != "*" }
+                }.toTypedArray()
+                if (extensions.isNotEmpty()) {
+                    addChoosableFileFilter(FileNameExtensionFilter(label, *extensions))
+                }
+            }
+        }
+    }
+
+    private fun appendDefaultExtension(file: File, defaultExtension: String?): File {
+        val extension = defaultExtension?.trim()?.removePrefix(".")?.takeIf { it.isNotBlank() }
+            ?: return file
+        return if (file.name.endsWith(".$extension", ignoreCase = true)) {
+            file
+        } else {
+            File(file.parentFile, "${file.name}.$extension")
+        }
+    }
+
+    /**
+     * 文件选择器必须在 EDT 上创建和显示；调用方可能来自 Compose 主线程或 Dispatchers.IO。
+     * 不能在这里使用 AWT FileDialog：macOS 上它会进入 AppKit 原生模态循环。
+     */
+    private fun onSwingEdt(block: () -> String?): String? {
+        if (SwingUtilities.isEventDispatchThread()) {
+            return runCatching(block).getOrNull()
+        }
+        var result: String? = null
+        runCatching {
+            SwingUtilities.invokeAndWait {
+                result = runCatching(block).getOrNull()
+            }
+        }
+        return result
     }
 
     /** AWT 旧式另存为对话框（Windows COM 不可用 / 非 Windows 回退） */
