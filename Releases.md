@@ -2,7 +2,7 @@
 
 <img src="desktop/src/main/resources/icon.png" width="96" alt="云析 YunX-Desktop" />
 
-# 云析桌面版 · macOS 首个版本
+# 云析桌面版 · macOS 1.3.3 修复版
 
 基于官方 Windows 桌面版与 Compose Multiplatform 构建。
 
@@ -17,16 +17,11 @@
 
 每个 DMG 均附带 `.sha256` 校验文件。请根据「 → 关于本机」中的芯片类型选择对应版本。
 
-## 本次更新
+## 本次修复
 
-- **双架构原生构建**：GitHub Actions 分别在 `macos-15-intel` 与 `macos-26` 上构建 Intel x64、
-  Apple Silicon arm64 DMG，不依赖 Rosetta。
-- **macOS 桌面适配**：菜单栏托盘、Finder 文件定位、原生文件选择器、剪贴板链接检测、系统代理读取。
-- **安全存储**：数据库主密钥使用 macOS 钥匙串保护；认证备份仍可加密导出/导入。
-- **浏览器登录**：修复 JCEF 初始化与退出竞态，内嵌 Chromium 登录在归档后重新打开仍可正常使用。
-- **Cookie 导入**：支持从 Chrome / Edge / Brave / Vivaldi / Opera / Chromium / Firefox 导入登录态。
-- **界面优化**：修复左上角大标题在 macOS 下呈浅灰半透明的问题，并避免折叠动画停留在中间状态。
-- **完成通知**：下载完成后通过 macOS 通知提醒；详细下载进度仍显示在应用窗口内。
+- **菜单栏托盘**：不再使用 AWT `PopupMenu` 的 AppKit 原生菜单跟踪循环，修复左键/右键打开托盘菜单后
+  应用进入“应用程序没有响应”的问题。
+- **Retina 图标**：菜单栏图标改为按 2x 尺寸生成并使用高质量缩放，修复顶部菜单栏图标模糊。
 
 ## 已知限制
 

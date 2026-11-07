@@ -65,10 +65,15 @@ jobs:
         run: |
           set -euo pipefail
           version="$(head -n 1 version.txt | tr -d '[:space:]')"
+          artifact_version=""
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            artifact_version="${GITHUB_REF_NAME#v}"
+          fi
+          artifact_version="${artifact_version:-$version}"
           source_dmg="$(find desktop/build/compose/binaries/main/dmg -maxdepth 1 -name '*.dmg' -print -quit)"
           test -n "${source_dmg}"
           mkdir -p dist
-          target="dist/YunX-Desktop-${version}-macOS-${{ matrix.arch }}.dmg"
+          target="dist/YunX-Desktop-${artifact_version}-macOS-${{ matrix.arch }}.dmg"
           cp "${source_dmg}" "${target}"
           hdiutil verify "${target}"
           (

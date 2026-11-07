@@ -1,24 +1,43 @@
 package com.yunx.app.util
 
-import java.awt.Image
-import java.awt.MenuItem
+import java.awt.Color
+import java.awt.EventQueue
 import java.awt.PopupMenu
+import java.awt.RenderingHints
 import java.awt.SystemTray
 import java.awt.TrayIcon
+import java.awt.Window
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.awt.image.BufferedImage
+import javax.swing.JMenuItem
+import javax.swing.JPopupMenu
+import javax.swing.JWindow
+import javax.swing.event.PopupMenuEvent
+import javax.swing.event.PopupMenuListener
 import javax.imageio.ImageIO
 
 /**
  * 系统托盘管理器。
  *
  * Windows 右键菜单用 JNA 调 Win32 TrackPopupMenu（中文正常、暗色跟随系统）；
- * macOS 使用 AWT PopupMenu（菜单栏托盘由系统绘制）。
+ * macOS 不使用 AWT TrayIcon 的 PopupMenu —— 它会在 AppKit 主线程进入
+ * NSMenuTrackingSession，部分 Compose/JCEF 组合下菜单窗口不显示，应用随即“未响应”。
+ * macOS 改为在图标点击后显示 Swing JPopupMenu（独立弹窗，不占用状态栏菜单循环）。
  */
 object TrayManager {
 
     private var trayIcon: TrayIcon? = null
+    private var macPopup: JPopupMenu? = null
+    private var macPopupAnchor: Window? = null
+
+    private const val TRAY_TOOLTIP = "云析 YunX-Desktop"
+    private const val MAC_TRAY_ICON_SIZE = 42
+
+    private val isMac: Boolean by lazy {
+        System.getProperty("os.name").orEmpty().lowercase()
+            .let { it.contains("mac") || it.contains("darwin") }
+    }
 
     /** 是否已安装托盘图标 */
     val isInstalled: Boolean
@@ -39,30 +58,44 @@ object TrayManager {
         onShowMac: (() -> Unit)? = null,
         onExitMac: (() -> Unit)? = null
     ) {
+        if (!EventQueue.isDispatchThread()) {
+            EventQueue.invokeLater {
+                install(image, onLeftClick, onRightClick, onShowMac, onExitMac)
+            }
+            return
+        }
         if (!SystemTray.isSupported()) return
         if (trayIcon != null) uninstall()
 
-        val isMac = System.getProperty("os.name").orEmpty().lowercase()
-            .let { it.contains("mac") || it.contains("darwin") }
-        val popup = PopupMenu()
         if (isMac) {
-            popup.add(MenuItem("显示主窗口").apply {
-                addActionListener { onShowMac?.invoke() ?: onLeftClick() }
-            })
-            popup.addSeparator()
-            popup.add(MenuItem("退出").apply {
-                addActionListener { onExitMac?.invoke() }
-            })
+            macPopup = buildMacPopup(
+                onShow = onShowMac ?: onLeftClick,
+                onExit = onExitMac
+            )
         }
-        val icon = TrayIcon(image.getScaledInstance(16, 16, Image.SCALE_SMOOTH), "云析 YunX-Desktop").apply {
+
+        // Windows 必须给 TrayIcon 挂一个 PopupMenu 才能收到右键事件；
+        // macOS 的菜单由 JPopupMenu 负责，不能挂 AWT PopupMenu。
+        val popup = if (isMac) null else PopupMenu()
+        val trayImage = scaleTrayImage(image)
+        val icon = (if (popup != null) {
+            TrayIcon(trayImage, TRAY_TOOLTIP, popup)
+        } else {
+            TrayIcon(trayImage, TRAY_TOOLTIP)
+        }).apply {
             isImageAutoSize = true
-            // Windows 必须设 PopupMenu 才能收到右键事件；macOS 直接使用系统托盘菜单
-            popupMenu = popup
             addMouseListener(object : MouseAdapter() {
                 override fun mouseClicked(e: MouseEvent) {
-                    if (e.button == MouseEvent.BUTTON1) onLeftClick()
+                    if (e.button == MouseEvent.BUTTON1 && !isMac) onLeftClick()
                 }
                 override fun mousePressed(e: MouseEvent) {
+                    if (isMac) {
+                        if (e.button == MouseEvent.BUTTON1 || e.button == MouseEvent.BUTTON3) {
+                            e.consume()
+                            showMacPopup(e.xOnScreen, e.yOnScreen)
+                        }
+                        return
+                    }
                     if (e.button == MouseEvent.BUTTON3) {
                         e.consume()
                         onRightClick(e.xOnScreen, e.yOnScreen)
@@ -78,6 +111,8 @@ object TrayManager {
 
     /** 移除托盘图标 */
     fun uninstall() {
+        disposeMacPopup()
+        macPopup = null
         trayIcon?.let { icon ->
             runCatching { SystemTray.getSystemTray().remove(icon) }
             trayIcon = null
@@ -103,4 +138,72 @@ object TrayManager {
             ?.getResourceAsStream("icon.png") ?: return@runCatching null
         ImageIO.read(stream)
     }.getOrNull()
+
+    private fun buildMacPopup(onShow: () -> Unit, onExit: (() -> Unit)?): JPopupMenu {
+        return JPopupMenu().apply {
+            add(JMenuItem("显示主窗口").apply {
+                addActionListener { onShow() }
+            })
+            addSeparator()
+            add(JMenuItem("退出").apply {
+                addActionListener { onExit?.invoke() }
+            })
+            addPopupMenuListener(object : PopupMenuListener {
+                override fun popupMenuWillBecomeVisible(e: PopupMenuEvent) = Unit
+                override fun popupMenuWillBecomeInvisible(e: PopupMenuEvent) = disposeMacAnchor()
+                override fun popupMenuCanceled(e: PopupMenuEvent) = disposeMacAnchor()
+            })
+        }
+    }
+
+    private fun showMacPopup(xOnScreen: Int, yOnScreen: Int) {
+        val popup = macPopup ?: return
+        disposeMacAnchor()
+        val anchor = JWindow().apply {
+            background = Color.BLACK
+            opacity = 0.01f
+            focusableWindowState = false
+            setSize(1, 1)
+            setLocation(xOnScreen, yOnScreen)
+            isVisible = true
+        }
+        macPopupAnchor = anchor
+        popup.show(anchor, 0, 0)
+    }
+
+    private fun disposeMacAnchor() {
+        macPopupAnchor?.dispose()
+        macPopupAnchor = null
+    }
+
+    private fun disposeMacPopup() {
+        macPopup?.isVisible = false
+        disposeMacAnchor()
+    }
+
+    /**
+     * macOS 菜单栏处于 Retina 2x 环境：把图标先生成 42px（21pt @2x），
+     * 再交给 AWT autosize。若先缩成 16px 再让 AppKit 拉伸，状态栏图标会明显发糊。
+     */
+    private fun scaleTrayImage(image: BufferedImage): BufferedImage {
+        val size = if (isMac) MAC_TRAY_ICON_SIZE else 16
+        if (image.width == size && image.height == size) return image
+        return BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB).also { out ->
+            val graphics = out.createGraphics()
+            try {
+                graphics.setRenderingHint(
+                    RenderingHints.KEY_INTERPOLATION,
+                    if (isMac) RenderingHints.VALUE_INTERPOLATION_BICUBIC
+                    else RenderingHints.VALUE_INTERPOLATION_BILINEAR
+                )
+                graphics.setRenderingHint(
+                    RenderingHints.KEY_RENDERING,
+                    RenderingHints.VALUE_RENDER_QUALITY
+                )
+                graphics.drawImage(image, 0, 0, size, size, null)
+            } finally {
+                graphics.dispose()
+            }
+        }
+    }
 }
