@@ -2,7 +2,7 @@
 
 <img src="desktop/src/main/resources/icon.png" width="96" alt="云析 YunX-Desktop" />
 
-# 云析桌面版 · macOS 1.3.3.1 版本
+# 云析桌面版 · macOS 1.3.4 版本
 
 基于官方 Windows 桌面版与 Compose Multiplatform 构建。
 
@@ -12,8 +12,8 @@
 
 | 芯片 | 文件 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4） | `YunX-Desktop-1.3.3.1-macOS-arm64.dmg` |
-| Intel Mac | `YunX-Desktop-1.3.3.1-macOS-x64.dmg` |
+| Apple Silicon（M1 / M2 / M3 / M4） | `YunX-Desktop-1.3.4-macOS-arm64.dmg` |
+| Intel Mac | `YunX-Desktop-1.3.4-macOS-x64.dmg` |
 
 每个 DMG 均附带 `.sha256` 校验文件。请根据「 → 关于本机」中的芯片类型选择对应版本。
 
