@@ -2,7 +2,7 @@
 
 <img src="desktop/src/main/resources/icon.png" width="96" alt="云析 YunX-Desktop" />
 
-# 云析桌面版 · macOS 1.3.3 修复版
+# 云析桌面版 · macOS 1.3.3.1 版本
 
 基于官方 Windows 桌面版与 Compose Multiplatform 构建。
 
@@ -12,18 +12,14 @@
 
 | 芯片 | 文件 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4） | `YunX-Desktop-1.3.3-macOS-arm64.dmg` |
-| Intel Mac | `YunX-Desktop-1.3.3-macOS-x64.dmg` |
+| Apple Silicon（M1 / M2 / M3 / M4） | `YunX-Desktop-1.3.3.1-macOS-arm64.dmg` |
+| Intel Mac | `YunX-Desktop-1.3.3.1-macOS-x64.dmg` |
 
 每个 DMG 均附带 `.sha256` 校验文件。请根据「 → 关于本机」中的芯片类型选择对应版本。
 
-## 本次修复
+## 本次新增
 
-- **菜单栏托盘**：不再使用 AWT `PopupMenu` 的 AppKit 原生菜单跟踪循环，修复左键/右键打开托盘菜单后
-  应用进入“应用程序没有响应”的问题。
-- **Retina 图标**：菜单栏图标改为按 2x 尺寸生成并使用高质量缩放，修复顶部菜单栏图标模糊。
-- **文件对话框**：macOS 改用 Swing 文件选择器，避开 AWT `FileDialog` 的 AppKit 原生模态循环，
-  修复选择目录、导入备份或导出认证信息时应用无响应的问题。
+- **菜单栏托盘**：添加了一些右键功能
 
 ## 已知限制
 
