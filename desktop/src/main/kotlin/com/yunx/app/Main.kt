@@ -1,6 +1,7 @@
 package com.yunx.app
 
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -16,6 +17,11 @@ import kotlinx.coroutines.launch
 import com.yunx.app.data.network.XunleiDeviceFingerprint
 import com.yunx.app.data.network.video.HeadlessWebView
 import com.yunx.app.ui.MainScreen
+import com.yunx.app.ui.DesktopTaskMenuAction
+import com.yunx.app.ui.DesktopTaskMenuController
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyShortcut
+import androidx.compose.ui.window.MenuBar
 import com.yunx.app.ui.clipboard.ClipboardLinkController
 import com.yunx.app.ui.jcef.JcefHolder
 import com.yunx.app.ui.theme.ComposeEmptyActivityTheme
@@ -164,8 +170,10 @@ fun main(args: Array<String>) {
 
     application {
         val scope = rememberCoroutineScope()
+        val taskMenuController = remember { DesktopTaskMenuController() }
+        val taskMenuState by taskMenuController.state.collectAsState()
         // 关闭时先淡出窗口再退出，消除原生窗口销毁瞬间的白屏闪烁
-        var mainWindow: java.awt.Frame? = null
+        var mainWindow by remember { mutableStateOf<java.awt.Frame?>(null) }
         // 关闭请求信号：点击窗口 X 时置 true，由 MainScreen 决定退出 / 托盘 / 询问
         var closeRequested by remember { mutableStateOf(false) }
         // 抑制关闭请求：程序化隐藏窗口（最小化到托盘）时为 true，避免 onCloseRequest 重跑导致弹窗闪烁
@@ -179,6 +187,12 @@ fun main(args: Array<String>) {
                 if (w != null) WindowFx.fadeOutThen(w) { exitApplication() }
                 else exitApplication()
             }
+        }
+        val sendTaskMenuAction: (DesktopTaskMenuAction) -> Unit = { action ->
+            if (action == DesktopTaskMenuAction.SHOW_TASKS) {
+                DesktopActions.bringWindowToFront(mainWindow)
+            }
+            taskMenuController.send(action)
         }
         // 启动器闪屏模式（launcher 注入 YUNXPC_SPLASH=1）：窗口可见性由 Compose 控制，
         // WindowFx 在窗口显示瞬间把透明度压到 0，内容首帧就绪后渐入，与闪屏淡出交叉衔接。
@@ -251,6 +265,29 @@ fun main(args: Array<String>) {
             state = windowState,
             icon = remember { loadWindowIcon() },
         ) {
+            if (isMac) {
+                MenuBar {
+                    Menu("任务") {
+                        Item(taskMenuState.summary, enabled = false, onClick = {})
+                        taskMenuState.currentTasks.forEach { label ->
+                            Item(label, onClick = { sendTaskMenuAction(DesktopTaskMenuAction.SHOW_TASKS) })
+                        }
+                        Separator()
+                        Item("查看下载列表", shortcut = KeyShortcut(Key.J, meta = true), onClick = {
+                            sendTaskMenuAction(DesktopTaskMenuAction.SHOW_TASKS)
+                        })
+                        Item("一键暂停", enabled = taskMenuState.canPause, onClick = {
+                            sendTaskMenuAction(DesktopTaskMenuAction.PAUSE_ALL)
+                        })
+                        Item("全部继续（含失败任务）", enabled = taskMenuState.canResume, onClick = {
+                            sendTaskMenuAction(DesktopTaskMenuAction.RESUME_ALL)
+                        })
+                        Item("打开下载目录", onClick = {
+                            sendTaskMenuAction(DesktopTaskMenuAction.OPEN_DOWNLOAD_DIRECTORY)
+                        })
+                    }
+                }
+            }
             androidx.compose.runtime.SideEffect {
                 mainWindow = window as? java.awt.Frame
                 // 接管窗口异常：默认实现会弹原生「Error」对话框（退出期的良性竞态也会弹）
@@ -287,7 +324,7 @@ fun main(args: Array<String>) {
                     (window as? java.awt.Frame)?.let { WindowFx.scheduleFadeIn(it) }
                 }
             }
-            // 系统托盘：Windows 用 Win32 原生菜单，macOS 用 AWT 系统托盘菜单
+            // 系统托盘：Windows 用 Win32 原生菜单，macOS 用 Swing 弹出菜单
             androidx.compose.runtime.LaunchedEffect(Unit) {
                 TrayManager.loadTrayIcon()?.let { icon ->
                     TrayManager.install(
@@ -295,27 +332,48 @@ fun main(args: Array<String>) {
                         onLeftClick = { DesktopActions.bringWindowToFront(mainWindow) },
                         onRightClick = { x, y ->
                             if (WindowsTitleBar.isWindows) {
+                                val state = taskMenuController.state.value
+                                val items = buildList {
+                                    add(state.summary to 10)
+                                    state.currentTasks.forEach { add(it to 3) }
+                                    add("-" to 0)
+                                    add("查看下载列表" to 3)
+                                    add("一键暂停" to 4)
+                                    add("全部继续（含失败任务）" to 5)
+                                    add("打开下载目录" to 6)
+                                    add("-" to 0)
+                                    add("显示主窗口" to 1)
+                                    add("退出" to 2)
+                                }
                                 val cmd = Win32PopupMenu.show(
-                                    items = listOf(
-                                        "显示主窗口" to 1,
-                                        "-" to 0,
-                                        "退出" to 2
-                                    ),
-                                    x = x, y = y
+                                    items = items,
+                                    x = x, y = y,
+                                    disabledIds = buildSet {
+                                        add(10)
+                                        if (!state.canPause) add(4)
+                                        if (!state.canResume) add(5)
+                                    }
                                 )
                                 when (cmd) {
                                     1 -> DesktopActions.bringWindowToFront(mainWindow)
                                     2 -> requestExit()
+                                    3 -> sendTaskMenuAction(DesktopTaskMenuAction.SHOW_TASKS)
+                                    4 -> sendTaskMenuAction(DesktopTaskMenuAction.PAUSE_ALL)
+                                    5 -> sendTaskMenuAction(DesktopTaskMenuAction.RESUME_ALL)
+                                    6 -> sendTaskMenuAction(DesktopTaskMenuAction.OPEN_DOWNLOAD_DIRECTORY)
                                 }
                             }
                         },
                         onShowMac = { DesktopActions.bringWindowToFront(mainWindow) },
-                        onExitMac = requestExit
+                        onExitMac = requestExit,
+                        taskMenuState = { taskMenuController.state.value },
+                        onTaskAction = sendTaskMenuAction
                     )
                 }
             }
             ComposeEmptyActivityTheme {
                 MainScreen(
+                    taskMenuController = taskMenuController,
                     closeRequested = closeRequested,
                     onCloseHandled = { closeRequested = false },
                     onExitApplication = requestExit,

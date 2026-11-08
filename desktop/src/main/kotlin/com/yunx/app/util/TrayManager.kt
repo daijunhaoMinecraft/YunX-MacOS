@@ -16,6 +16,8 @@ import javax.swing.JWindow
 import javax.swing.event.PopupMenuEvent
 import javax.swing.event.PopupMenuListener
 import javax.imageio.ImageIO
+import com.yunx.app.ui.DesktopTaskMenuAction
+import com.yunx.app.ui.DesktopTaskMenuState
 
 /**
  * 系统托盘管理器。
@@ -30,6 +32,10 @@ object TrayManager {
     private var trayIcon: TrayIcon? = null
     private var macPopup: JPopupMenu? = null
     private var macPopupAnchor: Window? = null
+    private var taskMenuState: () -> DesktopTaskMenuState = { DesktopTaskMenuState() }
+    private var onTaskAction: (DesktopTaskMenuAction) -> Unit = {}
+    private var showMacWindow: () -> Unit = {}
+    private var exitMacApplication: () -> Unit = {}
 
     private const val TRAY_TOOLTIP = "云析 YunX-Desktop"
     private const val MAC_TRAY_ICON_SIZE = 42
@@ -50,28 +56,33 @@ object TrayManager {
      * @param onRightClick 右键单击回调（屏幕坐标 x, y）
      * @param onShowMac 仅 macOS：托盘菜单「显示主窗口」
      * @param onExitMac 仅 macOS：托盘菜单「退出」
+     * @param taskMenuState 弹出菜单时读取的任务快照
+     * @param onTaskAction 下载快捷操作回调（AWT EDT）
      */
     fun install(
         image: BufferedImage,
         onLeftClick: () -> Unit,
         onRightClick: (Int, Int) -> Unit,
         onShowMac: (() -> Unit)? = null,
-        onExitMac: (() -> Unit)? = null
+        onExitMac: (() -> Unit)? = null,
+        taskMenuState: () -> DesktopTaskMenuState = { DesktopTaskMenuState() },
+        onTaskAction: (DesktopTaskMenuAction) -> Unit = {}
     ) {
         if (!EventQueue.isDispatchThread()) {
             EventQueue.invokeLater {
-                install(image, onLeftClick, onRightClick, onShowMac, onExitMac)
+                install(image, onLeftClick, onRightClick, onShowMac, onExitMac, taskMenuState, onTaskAction)
             }
             return
         }
         if (!SystemTray.isSupported()) return
         if (trayIcon != null) uninstall()
+        this.taskMenuState = taskMenuState
+        this.onTaskAction = onTaskAction
+        showMacWindow = onShowMac ?: onLeftClick
+        exitMacApplication = onExitMac ?: {}
 
         if (isMac) {
-            macPopup = buildMacPopup(
-                onShow = onShowMac ?: onLeftClick,
-                onExit = onExitMac
-            )
+            macPopup = buildMacPopup()
         }
 
         // Windows 必须给 TrayIcon 挂一个 PopupMenu 才能收到右键事件；
@@ -113,6 +124,10 @@ object TrayManager {
     fun uninstall() {
         disposeMacPopup()
         macPopup = null
+        taskMenuState = { DesktopTaskMenuState() }
+        onTaskAction = {}
+        showMacWindow = {}
+        exitMacApplication = {}
         trayIcon?.let { icon ->
             runCatching { SystemTray.getSystemTray().remove(icon) }
             trayIcon = null
@@ -139,15 +154,8 @@ object TrayManager {
         ImageIO.read(stream)
     }.getOrNull()
 
-    private fun buildMacPopup(onShow: () -> Unit, onExit: (() -> Unit)?): JPopupMenu {
+    private fun buildMacPopup(): JPopupMenu {
         return JPopupMenu().apply {
-            add(JMenuItem("显示主窗口").apply {
-                addActionListener { onShow() }
-            })
-            addSeparator()
-            add(JMenuItem("退出").apply {
-                addActionListener { onExit?.invoke() }
-            })
             addPopupMenuListener(object : PopupMenuListener {
                 override fun popupMenuWillBecomeVisible(e: PopupMenuEvent) = Unit
                 override fun popupMenuWillBecomeInvisible(e: PopupMenuEvent) = disposeMacAnchor()
@@ -158,6 +166,7 @@ object TrayManager {
 
     private fun showMacPopup(xOnScreen: Int, yOnScreen: Int) {
         val popup = macPopup ?: return
+        rebuildMacPopup(popup)
         disposeMacAnchor()
         val anchor = JWindow().apply {
             background = Color.BLACK
@@ -169,6 +178,29 @@ object TrayManager {
         }
         macPopupAnchor = anchor
         popup.show(anchor, 0, 0)
+    }
+
+    private fun rebuildMacPopup(popup: JPopupMenu) {
+        val state = taskMenuState()
+        popup.removeAll()
+        fun item(label: String, enabled: Boolean = true, action: () -> Unit) {
+            popup.add(JMenuItem(label).apply {
+                isEnabled = enabled
+                addActionListener { action() }
+            })
+        }
+        item(state.summary, enabled = false) {}
+        state.currentTasks.forEach { label ->
+            item(label) { onTaskAction(DesktopTaskMenuAction.SHOW_TASKS) }
+        }
+        popup.addSeparator()
+        item("查看下载列表") { onTaskAction(DesktopTaskMenuAction.SHOW_TASKS) }
+        item("一键暂停", state.canPause) { onTaskAction(DesktopTaskMenuAction.PAUSE_ALL) }
+        item("全部继续（含失败任务）", state.canResume) { onTaskAction(DesktopTaskMenuAction.RESUME_ALL) }
+        item("打开下载目录") { onTaskAction(DesktopTaskMenuAction.OPEN_DOWNLOAD_DIRECTORY) }
+        popup.addSeparator()
+        item("显示主窗口") { showMacWindow() }
+        item("退出") { exitMacApplication() }
     }
 
     private fun disposeMacAnchor() {

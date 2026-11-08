@@ -89,6 +89,7 @@ xattr -dr com.apple.quarantine /Applications/YunX-Desktop.app
   手动粘贴 Cookie；GitHub 支持 Personal Access Token。
 
 - **macOS 系统集成** —— 菜单栏托盘、原生日志与文件选择器、Finder 定位、钥匙串保护、剪贴板链接检测。
+- **任务快捷菜单** —— 顶部「任务」菜单和托盘菜单显示下载数量与当前任务进度，支持一键暂停、全部继续（含失败任务）、打开下载目录；按 `⌘J` 查看下载列表，窗口隐藏后仍可通过托盘控制下载。
 
 - **多账号与认证备份** —— 网盘与视频平台支持多账号、主账号与备注；认证信息可加密导出/导入。
 

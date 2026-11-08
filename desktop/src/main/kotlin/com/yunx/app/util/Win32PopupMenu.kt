@@ -58,6 +58,7 @@ object Win32PopupMenu {
     }
 
     private const val MF_STRING = 0x00000000
+    private const val MF_GRAYED = 0x00000001
     private const val MF_SEPARATOR = 0x00000800
     private const val TPM_RETURNCMD = 0x0100
     private const val TPM_BOTTOMALIGN = 0x0020
@@ -72,18 +73,18 @@ object Win32PopupMenu {
      * 弹出原生菜单并返回选中项 ID，0 = 未选择/取消失败。
      * 可在任意线程调用；内部统一切到 AWT EDT 执行（owner 窗口与调用线程必须一致）。
      */
-    fun show(items: List<Pair<String, Int>>, x: Int, y: Int): Int {
+    fun show(items: List<Pair<String, Int>>, x: Int, y: Int, disabledIds: Set<Int> = emptySet()): Int {
         if (!EventQueue.isDispatchThread()) {
             var result = 0
             return runCatching {
-                EventQueue.invokeAndWait { result = showOnEdt(items, x, y) }
+                EventQueue.invokeAndWait { result = showOnEdt(items, x, y, disabledIds) }
                 result
             }.getOrDefault(0)
         }
-        return showOnEdt(items, x, y)
+        return showOnEdt(items, x, y, disabledIds)
     }
 
-    private fun showOnEdt(items: List<Pair<String, Int>>, x: Int, y: Int): Int {
+    private fun showOnEdt(items: List<Pair<String, Int>>, x: Int, y: Int, disabledIds: Set<Int>): Int {
         val u32 = lib ?: return 0
         val owner = ownerWindow(u32) ?: return 0
         val hMenu = u32.CreatePopupMenu() ?: return 0
@@ -92,7 +93,8 @@ object Win32PopupMenu {
                 if (label == "-") {
                     u32.AppendMenuW(hMenu, MF_SEPARATOR, 0, null)
                 } else {
-                    u32.AppendMenuW(hMenu, MF_STRING, id, WString(label))
+                    val flags = MF_STRING or (if (id in disabledIds) MF_GRAYED else 0)
+                    u32.AppendMenuW(hMenu, flags, id, WString(label))
                 }
             }
             // 按当前系统配色刷新菜单主题（用户可能在运行中切换了亮/暗）

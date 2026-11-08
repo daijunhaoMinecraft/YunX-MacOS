@@ -72,6 +72,7 @@ import com.yunx.app.data.db.AppDatabase
 import com.yunx.app.data.download.ChunkDownloader
 import com.yunx.app.data.download.DownloadManager
 import com.yunx.app.data.download.DownloadPlatform
+import com.yunx.app.data.download.DownloadSaver
 import com.yunx.app.data.gopeed.GopeedEngine
 import com.yunx.app.data.network.BaiduApi
 import com.yunx.app.data.network.C139Api
@@ -215,7 +216,8 @@ fun MainScreen(
     /** 执行退出应用（淡出窗口 → exitApplication） */
     onExitApplication: () -> Unit = {},
     /** 最小化到系统托盘（由 Main.kt 实现，含关闭请求抑制） */
-    onMinimizeToTray: () -> Unit = {}
+    onMinimizeToTray: () -> Unit = {},
+    taskMenuController: DesktopTaskMenuController? = null
 ) {
     var currentTab by rememberSaveable { mutableStateOf(MainTab.Resolve) }
     // 网盘页：四宫格 / 列表布局切换
@@ -354,8 +356,16 @@ fun MainScreen(
         )
     }
 
+    val downloadViewModel: DownloadViewModel = viewModel(
+        factory = DownloadViewModel.Factory(downloadManager)
+    )
+    // 菜单和批量操作也订阅同一个任务状态，切换页面或隐藏窗口后仍可操作。
+    val tasks by downloadViewModel.tasks.collectAsState()
+    LaunchedEffect(tasks, taskMenuController) {
+        taskMenuController?.update(tasks)
+    }
+
     // ===== 关闭行为处理 =====
-    val tasks by downloadManager.tasks.collectAsState(initial = emptyList())
     // 关闭确认弹窗状态
     var showCloseDialog by remember { mutableStateOf(false) }
     var closeDialogHasDownloads by remember { mutableStateOf(false) }
@@ -650,9 +660,6 @@ fun MainScreen(
             { settings.quarkNoSaveDownload }
         )
     )
-    val downloadViewModel: DownloadViewModel = viewModel(
-        factory = DownloadViewModel.Factory(downloadManager)
-    )
     val bookmarkViewModel: BookmarkViewModel = viewModel(
         factory = BookmarkViewModel.Factory(db.bookmarkDao())
     )
@@ -668,6 +675,60 @@ fun MainScreen(
     val guangyaAccount by guangyaViewModel.guangyaAccount.collectAsState()
     val ilanzouAccount by ilanzouViewModel.ilanzouAccount.collectAsState()
     val lanzouAccount by lanzouViewModel.lanzouAccount.collectAsState()
+
+    // 放在各登录页的提前 return 之前，让菜单在任何页面和托盘模式下都能响应。
+    LaunchedEffect(taskMenuController) {
+        taskMenuController?.actions?.collect { action ->
+            when (action) {
+                DesktopTaskMenuAction.PAUSE_ALL -> downloadViewModel.pauseAll()
+                DesktopTaskMenuAction.RESUME_ALL -> downloadViewModel.resumeAll()
+                DesktopTaskMenuAction.OPEN_DOWNLOAD_DIRECTORY -> {
+                    val directory = DownloadSaver.resolveSaveDir(settings.downloadDirUri)
+                    if (!DesktopActions.openDirectory(directory.absolutePath)) {
+                        SnackbarController.show("无法打开下载目录：${directory.absolutePath}")
+                    }
+                }
+                DesktopTaskMenuAction.SHOW_TASKS -> {
+                    // 关闭覆盖页，确保从登录/设置子页打开时实际看到下载列表。
+                    viewModel.cancelAddAccount()
+                    ucViewModel.cancelAddAccount()
+                    xunleiViewModel.cancelAddAccount()
+                    baiduViewModel.cancelAddAccount()
+                    c139ViewModel.cancelAddAccount()
+                    pan123ViewModel.cancelAddAccount()
+                    pan115ViewModel.cancelAddAccount()
+                    guangyaViewModel.cancelAddAccount()
+                    ilanzouViewModel.cancelAddAccount()
+                    lanzouViewModel.cancelAddAccount()
+                    showQuarkLogin = false
+                    showUCLogin = false
+                    showXunleiLogin = false
+                    showXunleiWebLogin = false
+                    showXunleiVerify = false
+                    showBaiduLogin = false
+                    showC139Login = false
+                    showPan123Login = false
+                    showPan115Login = false
+                    showGuangYaLogin = false
+                    showILanzouLogin = false
+                    showLanzouLogin = false
+                    showAbout = false
+                    showSupport = false
+                    showTheme = false
+                    showBookmarks = false
+                    showExperimental = false
+                    showDownloadEngine = false
+                    showStorage = false
+                    showAnnouncements = false
+                    showOnboarding = false
+                    videoLoginPlatform = null
+                    videoManagePlatform = null
+                    videoResolveText = null
+                    currentTab = MainTab.Download
+                }
+            }
+        }
+    }
 
     // 解析页发起下载后，自动切换到「下载」Tab
     LaunchedEffect(resolveViewModel.downloadStarted) {
