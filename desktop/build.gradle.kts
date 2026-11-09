@@ -191,6 +191,15 @@ tasks.register<JavaExec>("testInProcess") {
         "com.yunx.app.ui.login.XunleiVerificationPolicyTest",
         "com.yunx.app.ui.DesktopTaskMenuTest",
         "com.yunx.app.data.network.XunleiWebCredentialTest",
+        "com.yunx.app.data.network.BaiduDownloadCryptoTest",
+        "com.yunx.app.data.network.BaiduP2pProtoTest",
+        "com.yunx.app.data.network.BaiduSessionPolicyTest",
+        "com.yunx.app.data.network.BaiduApiDownloadTest",
+        "com.yunx.app.data.download.BaiduP2pDownloaderTest",
+        "com.yunx.app.data.download.BaiduP2pDownloadManagerTest",
+        "com.yunx.app.data.repository.BaiduAccountRepositoryTest",
+        "com.yunx.app.ui.login.BaiduLoginCookiePolicyTest",
+        "com.yunx.app.util.BrowserCookieImporterBaiduTest",
         "com.yunx.app.util.LogRedactorTest"
     )
 }

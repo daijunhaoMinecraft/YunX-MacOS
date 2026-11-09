@@ -41,6 +41,9 @@ import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.yunx.app.ui.SnackbarController
+import com.yunx.app.ui.login.BaiduLoginCookiePolicy
+import com.yunx.app.util.BaiduBrowserCookie
+import com.yunx.app.util.baiduCookieHeader
 import com.yunx.app.util.BrowserCookieImporter
 import com.yunx.app.util.Log
 import kotlinx.coroutines.Dispatchers
@@ -85,6 +88,7 @@ fun JcefLoginPane(
     var detectedCookie by remember { mutableStateOf<String?>(null) }
     var isSaving by remember { mutableStateOf(false) }
     var browserFailure by remember { mutableStateOf<String?>(null) }
+    val browserLoading = remember { java.util.concurrent.atomic.AtomicBoolean(true) }
 
     // 创建浏览器（Compose 桌面 UI 线程即 EDT，JCEF 要求在 EDT 上创建）
     val browserHolder = remember {
@@ -100,6 +104,7 @@ fun JcefLoginPane(
                         canGoBack: Boolean,
                         canGoForward: Boolean
                     ) {
+                        browserLoading.set(isLoading)
                         Log.i(TAG, "loading=$isLoading url=${browser.url}")
                     }
 
@@ -156,9 +161,40 @@ fun JcefLoginPane(
     // （visitAllCookies 回调在 CEF IO 线程异步执行，需等待其完成再判断，见 collectCookies）
     LaunchedEffect(browserHolder) {
         if (browserHolder == null) return@LaunchedEffect
+        val baiduPolicy = BaiduLoginCookiePolicy()
+        var failedCookie: String? = null
+        var failedAt = 0L
         while (true) {
-            val cookie = withContext(Dispatchers.IO) { collectCookies(domains, requiredKeys, anyOfKeys) }
-            if (cookie != null) detectedCookie = cookie
+            val cookie = withContext(Dispatchers.IO) {
+                if (platform == "BAIDU") collectBaiduCookies()
+                else collectCookies(domains, requiredKeys, anyOfKeys)
+            }
+            if (platform == "BAIDU") {
+                val stableCookie = baiduPolicy.sample(cookie, browserLoading.get())
+                detectedCookie = stableCookie
+                val canRetry = stableCookie != failedCookie || System.currentTimeMillis() - failedAt >= 10_000L
+                if (stableCookie != null && !isSaving && canRetry) {
+                    isSaving = true
+                    try {
+                        if (onSave(stableCookie)) {
+                            CefCookieManager.getGlobalManager().flushStore(null)
+                            SnackbarController.show("登录成功")
+                            onSaved()
+                            return@LaunchedEffect
+                        }
+                        failedCookie = stableCookie
+                        failedAt = System.currentTimeMillis()
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        failedCookie = stableCookie
+                        failedAt = System.currentTimeMillis()
+                        Log.w(TAG, "百度登录校验失败，稍后重试")
+                    } finally {
+                        isSaving = false
+                    }
+                }
+            } else if (cookie != null) detectedCookie = cookie
             delay(1500)
         }
     }
@@ -231,10 +267,13 @@ fun JcefLoginPane(
                                 val ok = onSave(cookie)
                                 isSaving = false
                                 if (ok) {
+                                    if (platform == "BAIDU") CefCookieManager.getGlobalManager().flushStore(null)
                                     SnackbarController.show("登录成功")
                                     onSaved()
                                 } else {
-                                    SnackbarController.show("Cookie 校验失败，请确认已登录")
+                                    SnackbarController.show(if (platform == "BAIDU") {
+                                        "Cookie 无效或登录未完成，请确认包含 BDUSS 与 Pan 域 STOKEN"
+                                    } else "Cookie 校验失败，请确认已登录")
                                 }
                             }
                         },
@@ -407,6 +446,27 @@ private fun collectCookies(
         all.joinToString("; ") { "${it.first}=${it.second}" }
     }.getOrNull()
 }
+
+/** 百度只合并实际会发送给 Pan/根域的 Cookie，等待异步遍历完成后再生成稳定快照。 */
+private fun collectBaiduCookies(): String? = runCatching {
+    val manager = CefCookieManager.getGlobalManager()
+    val cookies = java.util.concurrent.ConcurrentLinkedQueue<BaiduBrowserCookie>()
+    val finished = java.util.concurrent.CountDownLatch(1)
+    val started = manager.visitAllCookies(object : CefCookieVisitor {
+        override fun visit(cookie: CefCookie, count: Int, total: Int, delete: BoolRef): Boolean {
+            cookies.add(BaiduBrowserCookie(
+                name = cookie.name.orEmpty(),
+                value = cookie.value.orEmpty(),
+                domain = cookie.domain.orEmpty(),
+                path = cookie.path.orEmpty().ifBlank { "/" }
+            ))
+            if (count >= total - 1) finished.countDown()
+            return true
+        }
+    })
+    if (!started || !finished.await(1500, java.util.concurrent.TimeUnit.MILLISECONDS)) return null
+    baiduCookieHeader(cookies.toList())
+}.getOrNull()
 
 /**
  * 方案 A 入口按钮 + 对话框：扫描本机浏览器并列出可导入的 Cookie。

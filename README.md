@@ -83,6 +83,8 @@ xattr -dr com.apple.quarantine /Applications/YunX-Desktop.app
 
 - **高速下载** —— Range 分片并发 + 断点续传 + 慢连接自动换线 + 全局限速；B 站高清分轨并行下载后自动合轨。
 
+- **百度网盘下载** —— 默认使用 CDN，可在设置中切换为内置百度 P2P 下载（仅下载）；支持分片解密与校验、慢节点切换和 CDN 补齐，无需安装 Gopeed。
+
 - **P2P 下载** —— 磁力 / BT 种子 / ed2k 交由 Gopeed 引擎下载，支持导入 `.torrent`、Tracker 管理与 DHT 开关。
 
 - **多种登录方式** —— 内嵌 Chromium 登录、从 Chrome / Edge / Brave / Firefox 等浏览器导入 Cookie、
